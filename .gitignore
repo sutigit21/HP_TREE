@@ -1,0 +1,36 @@
+# Build artifacts
+cpp/build/
+*.o
+*.a
+*.so
+*.dylib
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+dist/
+build/
+.venv/
+venv/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Generated PDFs and docs (keep the article source .md)
+HP-TREE_article.docx
+HP-TREE_article.md
+HP-TREE_article.pdf
+HP_TREE_Research_Article.pdf
+
+# Legacy scripts
+HP-TREE_FINAL_SIMULATION ANALYSIS CODE_09-07-2025.py
