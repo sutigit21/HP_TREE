@@ -17,6 +17,7 @@ private:
     State          state_        = State::INVALID;
     const PredicateSet* predicates_ = nullptr;
     const CompositeKeySchema* schema_ = nullptr;
+    bool           clean_        = false;
 
     std::unordered_map<NodeId, LeafNode*>* leaf_map_ = nullptr;
 
@@ -28,10 +29,11 @@ public:
                    ScanDirection dir = ScanDirection::FORWARD,
                    const PredicateSet* preds = nullptr,
                    const CompositeKeySchema* schema = nullptr,
-                   std::unordered_map<NodeId, LeafNode*>* lmap = nullptr)
+                   std::unordered_map<NodeId, LeafNode*>* lmap = nullptr,
+                   bool clean = false)
         : current_leaf_(start_leaf), record_idx_(start_idx),
           range_(range), reader_txn_(txn), direction_(dir),
-          predicates_(preds), schema_(schema), leaf_map_(lmap) {
+          predicates_(preds), schema_(schema), clean_(clean), leaf_map_(lmap) {
         if (current_leaf_ && !current_leaf_->records.empty()) {
             state_ = State::VALID;
             advance_to_valid();
@@ -157,19 +159,23 @@ private:
 
     void move_to_next_leaf() {
         if (!current_leaf_) { state_ = State::END; return; }
-        NodeId next_id = current_leaf_->next_leaf;
-        if (next_id == INVALID_NODE || !leaf_map_) {
-            state_ = State::END;
-            current_leaf_ = nullptr;
-            return;
+        LeafNode* nxt = current_leaf_->next_leaf_ptr;
+        if (!nxt) {
+            NodeId next_id = current_leaf_->next_leaf;
+            if (next_id == INVALID_NODE || !leaf_map_) {
+                state_ = State::END;
+                current_leaf_ = nullptr;
+                return;
+            }
+            auto it = leaf_map_->find(next_id);
+            if (it == leaf_map_->end()) {
+                state_ = State::END;
+                current_leaf_ = nullptr;
+                return;
+            }
+            nxt = it->second;
         }
-        auto it = leaf_map_->find(next_id);
-        if (it == leaf_map_->end()) {
-            state_ = State::END;
-            current_leaf_ = nullptr;
-            return;
-        }
-        current_leaf_ = it->second;
+        current_leaf_ = nxt;
         record_idx_ = 0;
         if (current_leaf_->records.empty()) {
             move_to_next_leaf();
@@ -178,19 +184,23 @@ private:
 
     void move_to_prev_leaf() {
         if (!current_leaf_) { state_ = State::END; return; }
-        NodeId prev_id = current_leaf_->prev_leaf;
-        if (prev_id == INVALID_NODE || !leaf_map_) {
-            state_ = State::END;
-            current_leaf_ = nullptr;
-            return;
+        LeafNode* prv = current_leaf_->prev_leaf_ptr;
+        if (!prv) {
+            NodeId prev_id = current_leaf_->prev_leaf;
+            if (prev_id == INVALID_NODE || !leaf_map_) {
+                state_ = State::END;
+                current_leaf_ = nullptr;
+                return;
+            }
+            auto it = leaf_map_->find(prev_id);
+            if (it == leaf_map_->end()) {
+                state_ = State::END;
+                current_leaf_ = nullptr;
+                return;
+            }
+            prv = it->second;
         }
-        auto it = leaf_map_->find(prev_id);
-        if (it == leaf_map_->end()) {
-            state_ = State::END;
-            current_leaf_ = nullptr;
-            return;
-        }
-        current_leaf_ = it->second;
+        current_leaf_ = prv;
         record_idx_ = current_leaf_->records.empty()
                     ? 0 : current_leaf_->records.size() - 1;
         if (current_leaf_->records.empty()) {
@@ -223,7 +233,7 @@ private:
                 continue;
             }
 
-            if (rec.tombstone || !rec.version.is_visible(reader_txn_)) {
+            if (!clean_ && (rec.tombstone || !rec.version.is_visible(reader_txn_))) {
                 if (direction_ == ScanDirection::FORWARD) advance_forward();
                 else advance_reverse();
                 continue;

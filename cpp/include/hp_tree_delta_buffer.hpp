@@ -29,7 +29,8 @@ class DeltaBuffer {
     std::vector<DeltaEntry> entries_;
     size_t capacity_;
     std::atomic<uint64_t> seq_counter_{0};
-    mutable std::shared_mutex mtx_;
+    std::atomic<size_t>   size_hint_{0};
+    mutable std::mutex    mtx_;
     size_t total_inserts_ = 0;
     size_t total_deletes_ = 0;
     size_t total_updates_ = 0;
@@ -40,72 +41,88 @@ public:
     }
 
     bool is_full() const {
-        std::shared_lock<std::shared_mutex> lock(mtx_);
-        return entries_.size() >= capacity_;
+        return size_hint_.load(std::memory_order_relaxed) >= capacity_;
     }
 
     bool is_empty() const {
-        std::shared_lock<std::shared_mutex> lock(mtx_);
-        return entries_.empty();
+        return size_hint_.load(std::memory_order_relaxed) == 0;
     }
 
     size_t size() const {
-        std::shared_lock<std::shared_mutex> lock(mtx_);
-        return entries_.size();
+        return size_hint_.load(std::memory_order_relaxed);
+    }
+
+    size_t size_hint() const {
+        return size_hint_.load(std::memory_order_relaxed);
     }
 
     double fill_ratio() const {
-        std::shared_lock<std::shared_mutex> lock(mtx_);
-        return capacity_ > 0 ?
-            static_cast<double>(entries_.size()) / capacity_ : 0.0;
+        size_t s = size_hint_.load(std::memory_order_relaxed);
+        return capacity_ > 0 ? static_cast<double>(s) / capacity_ : 0.0;
     }
 
     bool needs_flush(size_t tree_size) const {
-        std::shared_lock<std::shared_mutex> lock(mtx_);
-        if (entries_.size() >= capacity_) return true;
+        size_t s = size_hint_.load(std::memory_order_relaxed);
+        if (s >= capacity_) return true;
         if (tree_size > 0 &&
-            static_cast<double>(entries_.size()) / tree_size > DELTA_MERGE_RATIO)
+            static_cast<double>(s) / tree_size > DELTA_MERGE_RATIO)
             return true;
         return false;
     }
 
     void add_insert(const Record& rec, TxnId txn) {
-        std::unique_lock<std::shared_mutex> lock(mtx_);
+        std::lock_guard<std::mutex> lock(mtx_);
         DeltaEntry e;
         e.op = DeltaOpType::INSERT;
         e.record = rec;
         e.txn_id = txn;
-        e.seq = seq_counter_.fetch_add(1);
+        e.seq = seq_counter_.fetch_add(1, std::memory_order_relaxed);
         entries_.push_back(std::move(e));
         total_inserts_++;
+        size_hint_.store(entries_.size(), std::memory_order_relaxed);
+    }
+
+    void add_insert(Record&& rec, TxnId txn) {
+        std::lock_guard<std::mutex> lock(mtx_);
+        DeltaEntry e;
+        e.op = DeltaOpType::INSERT;
+        e.record = std::move(rec);
+        e.txn_id = txn;
+        e.seq = seq_counter_.fetch_add(1, std::memory_order_relaxed);
+        entries_.push_back(std::move(e));
+        total_inserts_++;
+        size_hint_.store(entries_.size(), std::memory_order_relaxed);
     }
 
     void add_delete(CompositeKey key, TxnId txn) {
-        std::unique_lock<std::shared_mutex> lock(mtx_);
+        std::lock_guard<std::mutex> lock(mtx_);
         DeltaEntry e;
         e.op = DeltaOpType::DELETE;
         e.record.key = key;
         e.record.tombstone = true;
         e.txn_id = txn;
-        e.seq = seq_counter_.fetch_add(1);
+        e.seq = seq_counter_.fetch_add(1, std::memory_order_relaxed);
         entries_.push_back(std::move(e));
         total_deletes_++;
+        size_hint_.store(entries_.size(), std::memory_order_relaxed);
     }
 
     void add_update(const Record& old_rec, const Record& new_rec, TxnId txn) {
-        std::unique_lock<std::shared_mutex> lock(mtx_);
+        std::lock_guard<std::mutex> lock(mtx_);
         DeltaEntry e;
         e.op = DeltaOpType::UPDATE;
         e.record = new_rec;
         e.old_record = old_rec;
         e.txn_id = txn;
-        e.seq = seq_counter_.fetch_add(1);
+        e.seq = seq_counter_.fetch_add(1, std::memory_order_relaxed);
         entries_.push_back(std::move(e));
         total_updates_++;
+        size_hint_.store(entries_.size(), std::memory_order_relaxed);
     }
 
     std::vector<Record*> search(CompositeKey key, TxnId reader_txn) {
-        std::shared_lock<std::shared_mutex> lock(mtx_);
+        if (size_hint_.load(std::memory_order_relaxed) == 0) return {};
+        std::lock_guard<std::mutex> lock(mtx_);
         std::vector<Record*> result;
         for (auto& e : entries_) {
             if (e.record.key == key && !e.record.tombstone
@@ -118,7 +135,8 @@ public:
     }
 
     std::vector<Record*> range_search(const KeyRange& kr, TxnId reader_txn) {
-        std::shared_lock<std::shared_mutex> lock(mtx_);
+        if (size_hint_.load(std::memory_order_relaxed) == 0) return {};
+        std::lock_guard<std::mutex> lock(mtx_);
         std::vector<Record*> result;
         for (auto& e : entries_) {
             if (e.record.key >= kr.low && e.record.key <= kr.high
@@ -132,7 +150,8 @@ public:
     }
 
     std::set<CompositeKey> deleted_keys() const {
-        std::shared_lock<std::shared_mutex> lock(mtx_);
+        if (size_hint_.load(std::memory_order_relaxed) == 0) return {};
+        std::lock_guard<std::mutex> lock(mtx_);
         std::set<CompositeKey> keys;
         for (auto& e : entries_) {
             if (e.op == DeltaOpType::DELETE) keys.insert(e.record.key);
@@ -141,16 +160,17 @@ public:
     }
 
     std::vector<DeltaEntry> drain() {
-        std::unique_lock<std::shared_mutex> lock(mtx_);
+        std::lock_guard<std::mutex> lock(mtx_);
         auto drained = std::move(entries_);
         entries_.clear();
         entries_.reserve(capacity_);
         std::sort(drained.begin(), drained.end());
+        size_hint_.store(0, std::memory_order_relaxed);
         return drained;
     }
 
     std::vector<DeltaEntry> snapshot() const {
-        std::shared_lock<std::shared_mutex> lock(mtx_);
+        std::lock_guard<std::mutex> lock(mtx_);
         auto copy = entries_;
         std::sort(copy.begin(), copy.end());
         return copy;
@@ -166,7 +186,7 @@ public:
     };
 
     Stats stats() const {
-        std::shared_lock<std::shared_mutex> lock(mtx_);
+        std::lock_guard<std::mutex> lock(mtx_);
         return {
             entries_.size(), capacity_,
             total_inserts_, total_deletes_, total_updates_,
@@ -176,12 +196,13 @@ public:
     }
 
     void clear() {
-        std::unique_lock<std::shared_mutex> lock(mtx_);
+        std::lock_guard<std::mutex> lock(mtx_);
         entries_.clear();
+        size_hint_.store(0, std::memory_order_relaxed);
     }
 
     void set_capacity(size_t cap) {
-        std::unique_lock<std::shared_mutex> lock(mtx_);
+        std::lock_guard<std::mutex> lock(mtx_);
         capacity_ = cap;
     }
 };

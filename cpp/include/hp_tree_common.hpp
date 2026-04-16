@@ -122,6 +122,7 @@ struct HPTreeConfig {
     bool         enable_buffer_pool = false;
     bool         enable_delta_buffer= true;
     bool         enable_aggregates  = true;
+    bool         single_threaded    = false;
     std::string  wal_path           = "hp_tree.wal";
     std::string  data_path          = "hp_tree.dat";
 };

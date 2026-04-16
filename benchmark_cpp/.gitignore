@@ -1,0 +1,9 @@
+# Build artifacts
+build/
+
+# Generated binary datasets (regenerable via python/generate_datasets.py)
+datasets/*.bin
+
+# Benchmark result JSON / logs
+results/*.json
+results/*.log

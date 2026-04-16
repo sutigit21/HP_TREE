@@ -64,6 +64,8 @@ public:
     NullBitmap          null_bitmap;
     NodeId              next_leaf = INVALID_NODE;
     NodeId              prev_leaf = INVALID_NODE;
+    LeafNode*           next_leaf_ptr = nullptr;
+    LeafNode*           prev_leaf_ptr = nullptr;
 
     LeafNode() { meta.type = NodeType::LEAF; }
 
@@ -119,6 +121,18 @@ public:
         return result;
     }
 
+    // Fast path: assumes no tombstones in this leaf and reader_txn==TXN_COMMITTED.
+    // Caller must verify those preconditions.
+    std::vector<Record*> search_fast(CompositeKey key) {
+        std::vector<Record*> result;
+        auto range = std::equal_range(records.begin(), records.end(), Record{key},
+            [](const Record& a, const Record& b) { return a.key < b.key; });
+        for (auto it = range.first; it != range.second; ++it) {
+            result.push_back(&(*it));
+        }
+        return result;
+    }
+
     std::vector<Record*> range_search(const KeyRange& kr, TxnId reader_txn) {
         std::vector<Record*> result;
         Record lo{kr.low}; Record hi{kr.high};
@@ -133,6 +147,19 @@ public:
         return result;
     }
 
+    // Fast path: skip MVCC/tombstone checks. Caller guarantees clean tree.
+    void range_search_fast(const KeyRange& kr, std::vector<Record*>& out) {
+        Record lo{kr.low}; Record hi{kr.high};
+        auto start = std::lower_bound(records.begin(), records.end(), lo,
+            [](const Record& a, const Record& b) { return a.key < b.key; });
+        auto end = std::upper_bound(records.begin(), records.end(), hi,
+            [](const Record& a, const Record& b) { return a.key < b.key; });
+        out.reserve(out.size() + static_cast<size_t>(end - start));
+        for (auto it = start; it != end; ++it) {
+            out.push_back(&(*it));
+        }
+    }
+
     std::vector<Record*> predicate_search(const PredicateSet& preds,
                                           const CompositeKeySchema& schema,
                                           TxnId reader_txn) {
@@ -144,6 +171,18 @@ public:
                 result.push_back(&r);
         }
         return result;
+    }
+
+    // Fast path: skip MVCC/tombstone checks. Caller guarantees clean.
+    void predicate_search_fast(const PredicateSet& preds,
+                               const CompositeKeySchema& schema,
+                               std::vector<Record*>& out) {
+        const size_t n = records.size();
+        for (size_t i = 0; i < n; ++i) {
+            auto& r = records[i];
+            if (preds.evaluate_record(r.key, schema, &null_bitmap, i))
+                out.push_back(&r);
+        }
     }
 
     std::pair<std::unique_ptr<LeafNode>, std::unique_ptr<LeafNode>>

@@ -25,6 +25,7 @@ class HPTree {
     std::atomic<NodeId>  next_node_id_{1};
     std::atomic<TxnId>   next_txn_id_{1};
     std::atomic<uint64_t> total_records_{0};
+    std::atomic<uint64_t> total_tombstones_{0};
     std::atomic<uint64_t> total_splits_{0};
     std::atomic<uint64_t> total_merges_{0};
     std::atomic<uint64_t> total_rebalances_{0};
@@ -61,6 +62,8 @@ class HPTree {
             leaves[i]->prev_leaf = (i > 0) ? leaves[i - 1]->meta.id : INVALID_NODE;
             leaves[i]->next_leaf = (i + 1 < leaves.size())
                                  ? leaves[i + 1]->meta.id : INVALID_NODE;
+            leaves[i]->prev_leaf_ptr = (i > 0) ? leaves[i - 1] : nullptr;
+            leaves[i]->next_leaf_ptr = (i + 1 < leaves.size()) ? leaves[i + 1] : nullptr;
         }
     }
 
@@ -429,6 +432,20 @@ class HPTree {
         return search_recursive(child, key, txn);
     }
 
+    // Fast path: no per-node latches, no MVCC check. Caller guarantees
+    // single-threaded access and a clean tree (no tombstones, reader=COMMITTED).
+    std::vector<Record*> search_fast_recursive(HPNode* node,
+                                               CompositeKey key) const {
+        while (node && !node->is_leaf()) {
+            auto* internal = static_cast<InternalNode*>(node);
+            size_t idx = internal->find_child_index(key);
+            if (idx >= internal->children.size()) return {};
+            node = internal->children[idx].get();
+        }
+        if (!node) return {};
+        return static_cast<LeafNode*>(node)->search_fast(key);
+    }
+
     void range_search_recursive(HPNode* node, const KeyRange& range,
                                 TxnId txn, std::vector<Record*>& results) const {
         if (!node) return;
@@ -452,30 +469,135 @@ class HPTree {
         internal->latch.unlock_shared();
     }
 
+    // Fast path: no per-node latches, no MVCC check. Caller guarantees
+    // single-threaded access and a clean tree.
+    void range_search_fast_recursive(HPNode* node, const KeyRange& range,
+                                     std::vector<Record*>& results) const {
+        if (!node) return;
+        if (!node->meta.range.overlaps(range)) return;
+        if (node->is_leaf()) {
+            static_cast<LeafNode*>(node)->range_search_fast(range, results);
+            return;
+        }
+        auto* internal = static_cast<InternalNode*>(node);
+        for (auto& child : internal->children) {
+            if (child->meta.range.overlaps(range))
+                range_search_fast_recursive(child.get(), range, results);
+        }
+    }
+
+    static bool predicates_can_match_node(const PredicateSet& preds,
+                                          const HPNode* node) {
+        const auto& dims = node->aggregates.dims;
+        if (dims.empty()) return true;  // aggregates not populated
+        for (const auto& p : preds.predicates) {
+            if (p.dim_idx >= dims.size()) continue;
+            const auto& stats = dims[p.dim_idx];
+            if (stats.count_non_null == 0) {
+                // only nulls or empty: EQ/BETWEEN/ranges on a non-null value cannot match
+                switch (p.op) {
+                case PredicateOp::EQ:
+                case PredicateOp::NEQ:
+                case PredicateOp::LT:
+                case PredicateOp::LTE:
+                case PredicateOp::GT:
+                case PredicateOp::GTE:
+                case PredicateOp::BETWEEN:
+                case PredicateOp::IN:
+                case PredicateOp::IS_NOT_NULL:
+                    return false;
+                default: break;
+                }
+                continue;
+            }
+            uint64_t dmin = static_cast<uint64_t>(stats.min_val);
+            uint64_t dmax = static_cast<uint64_t>(stats.max_val);
+            switch (p.op) {
+            case PredicateOp::EQ: {
+                uint64_t v = static_cast<uint64_t>(p.value);
+                if (v < dmin || v > dmax) return false;
+                break;
+            }
+            case PredicateOp::BETWEEN: {
+                uint64_t lo = static_cast<uint64_t>(p.value);
+                uint64_t hi = static_cast<uint64_t>(p.value_high);
+                if (hi < dmin || lo > dmax) return false;
+                break;
+            }
+            case PredicateOp::LT: {
+                uint64_t v = static_cast<uint64_t>(p.value);
+                if (dmin >= v) return false;
+                break;
+            }
+            case PredicateOp::LTE: {
+                uint64_t v = static_cast<uint64_t>(p.value);
+                if (dmin > v) return false;
+                break;
+            }
+            case PredicateOp::GT: {
+                uint64_t v = static_cast<uint64_t>(p.value);
+                if (dmax <= v) return false;
+                break;
+            }
+            case PredicateOp::GTE: {
+                uint64_t v = static_cast<uint64_t>(p.value);
+                if (dmax < v) return false;
+                break;
+            }
+            case PredicateOp::IN: {
+                bool any = false;
+                for (auto& vv : p.in_values) {
+                    uint64_t v = static_cast<uint64_t>(vv);
+                    if (v >= dmin && v <= dmax) { any = true; break; }
+                }
+                if (!any) return false;
+                break;
+            }
+            default: break;
+            }
+        }
+        return true;
+    }
+
     void predicate_search_recursive(HPNode* node, const PredicateSet& preds,
                                     TxnId txn,
-                                    std::vector<Record*>& results) const {
+                                    std::vector<Record*>& results,
+                                    bool clean = false) const {
         if (!node) return;
 
         KeyRange approx_range = preds.to_key_range(schema_);
         if (!node->meta.range.overlaps(approx_range)) return;
+        if (!predicates_can_match_node(preds, node)) return;
 
         if (node->is_leaf()) {
             auto* leaf = static_cast<LeafNode*>(node);
-            leaf->latch.lock_shared();
-            auto partial = leaf->predicate_search(preds, schema_, txn);
-            results.insert(results.end(), partial.begin(), partial.end());
-            leaf->latch.unlock_shared();
+            if (clean) {
+                leaf->predicate_search_fast(preds, schema_, results);
+            } else {
+                leaf->latch.lock_shared();
+                auto partial = leaf->predicate_search(preds, schema_, txn);
+                results.insert(results.end(), partial.begin(), partial.end());
+                leaf->latch.unlock_shared();
+            }
             return;
         }
 
         auto* internal = static_cast<InternalNode*>(node);
-        internal->latch.lock_shared();
-        for (auto& child : internal->children) {
-            if (child->meta.range.overlaps(approx_range))
-                predicate_search_recursive(child.get(), preds, txn, results);
+        if (clean) {
+            for (auto& child : internal->children) {
+                if (!child->meta.range.overlaps(approx_range)) continue;
+                if (!predicates_can_match_node(preds, child.get())) continue;
+                predicate_search_recursive(child.get(), preds, txn, results, true);
+            }
+        } else {
+            internal->latch.lock_shared();
+            for (auto& child : internal->children) {
+                if (!child->meta.range.overlaps(approx_range)) continue;
+                if (!predicates_can_match_node(preds, child.get())) continue;
+                predicate_search_recursive(child.get(), preds, txn, results, false);
+            }
+            internal->latch.unlock_shared();
         }
-        internal->latch.unlock_shared();
     }
 
     void flush_delta_buffer_locked() {
@@ -605,6 +727,11 @@ public:
             return;
         }
 
+        for (auto& r : records) {
+            if (r.version.xmin == INVALID_TXN) r.version.xmin = 1;
+            if (r.version.xmax == INVALID_TXN) r.version.xmax = TXN_COMMITTED;
+        }
+
         std::sort(records.begin(), records.end());
         total_records_ = records.size();
 
@@ -634,41 +761,52 @@ public:
 
     bool insert(const Record& rec, TxnId txn) {
         if (config_.enable_delta_buffer) {
-            delta_buffer_.add_insert(rec, txn);
+            Record r = rec;
+            r.version.xmin = txn;
+            r.version.xmax = TXN_COMMITTED;
+            delta_buffer_.add_insert(std::move(r), txn);
             if (delta_buffer_.needs_flush(total_records_.load())) {
-                std::unique_lock<std::shared_mutex> lock(tree_latch_);
-                flush_delta_buffer_locked();
+                if (config_.single_threaded) {
+                    flush_delta_buffer_locked();
+                } else {
+                    std::unique_lock<std::shared_mutex> lock(tree_latch_);
+                    flush_delta_buffer_locked();
+                }
             }
             return true;
         }
 
-        std::unique_lock<std::shared_mutex> lock(tree_latch_);
+        auto do_insert = [&]() -> bool {
+            if (!root_) {
+                auto leaf = make_leaf();
+                Record r = rec;
+                r.version.xmin = txn;
+                r.version.xmax = TXN_COMMITTED;
+                leaf->insert_record(r);
+                leaf->recompute_beta();
+                if (config_.enable_aggregates)
+                    leaf->recompute_aggregates(schema_);
+                root_ = std::move(leaf);
+                register_leaf(static_cast<LeafNode*>(root_.get()));
+                total_records_++;
+                if (config_.enable_wal)
+                    wal_->log_insert(txn, INVALID_PAGE, root_->meta.id, rec.key, {});
+                return true;
+            }
 
-        if (!root_) {
-            auto leaf = make_leaf();
-            Record r = rec;
-            r.version.xmin = txn;
-            r.version.xmax = TXN_COMMITTED;
-            leaf->insert_record(r);
-            leaf->recompute_beta();
-            if (config_.enable_aggregates)
-                leaf->recompute_aggregates(schema_);
-            root_ = std::move(leaf);
-            register_leaf(static_cast<LeafNode*>(root_.get()));
-            total_records_++;
             if (config_.enable_wal)
-                wal_->log_insert(txn, INVALID_PAGE, root_->meta.id, rec.key, {});
+                wal_->log_insert(txn, INVALID_PAGE, INVALID_NODE, rec.key, {});
+
+            auto result = insert_recursive(root_.get(), rec, txn);
+            if (result.split_occurred) grow_root(result);
+
+            total_records_++;
             return true;
-        }
+        };
 
-        if (config_.enable_wal)
-            wal_->log_insert(txn, INVALID_PAGE, INVALID_NODE, rec.key, {});
-
-        auto result = insert_recursive(root_.get(), rec, txn);
-        if (result.split_occurred) grow_root(result);
-
-        total_records_++;
-        return true;
+        if (config_.single_threaded) return do_insert();
+        std::unique_lock<std::shared_mutex> lock(tree_latch_);
+        return do_insert();
     }
 
     // ======================================================================
@@ -681,25 +819,37 @@ public:
     bool remove(CompositeKey key, TxnId txn) {
         if (config_.enable_delta_buffer) {
             delta_buffer_.add_delete(key, txn);
+            total_tombstones_.fetch_add(1, std::memory_order_relaxed);
             if (delta_buffer_.needs_flush(total_records_.load())) {
-                std::unique_lock<std::shared_mutex> lock(tree_latch_);
-                flush_delta_buffer_locked();
+                if (config_.single_threaded) {
+                    flush_delta_buffer_locked();
+                } else {
+                    std::unique_lock<std::shared_mutex> lock(tree_latch_);
+                    flush_delta_buffer_locked();
+                }
             }
             return true;
         }
 
+        auto do_remove = [&]() -> bool {
+            if (!root_) return false;
+            bool removed = delete_recursive(root_.get(), key, txn);
+            if (removed) {
+                total_records_--;
+                total_tombstones_.fetch_add(1, std::memory_order_relaxed);
+            }
+
+            if (root_->is_internal()) {
+                auto* internal = static_cast<InternalNode*>(root_.get());
+                if (internal->children.size() == 1)
+                    root_ = internal->children[0];
+            }
+            return removed;
+        };
+
+        if (config_.single_threaded) return do_remove();
         std::unique_lock<std::shared_mutex> lock(tree_latch_);
-        if (!root_) return false;
-        bool removed = delete_recursive(root_.get(), key, txn);
-        if (removed) total_records_--;
-
-        if (root_->is_internal()) {
-            auto* internal = static_cast<InternalNode*>(root_.get());
-            if (internal->children.size() == 1)
-                root_ = internal->children[0];
-        }
-
-        return removed;
+        return do_remove();
     }
 
     // ======================================================================
@@ -750,31 +900,47 @@ public:
     }
 
     std::vector<Record*> search(CompositeKey key, TxnId txn) const {
+        const bool delta_empty = !config_.enable_delta_buffer
+                              || delta_buffer_.is_empty();
+        const bool clean = (total_tombstones_.load(std::memory_order_relaxed) == 0
+                         && txn == TXN_COMMITTED);
+
+        // Fast path: single-threaded + clean tree + empty delta buffer.
+        if (config_.single_threaded && clean && delta_empty) {
+            if (!root_) return {};
+            return search_fast_recursive(root_.get(), key);
+        }
+
         std::vector<Record*> combined;
 
-        if (config_.enable_delta_buffer) {
+        if (!delta_empty) {
             auto delta_results = const_cast<DeltaBuffer&>(delta_buffer_).search(key, txn);
             combined.insert(combined.end(), delta_results.begin(), delta_results.end());
         }
 
-        {
-            std::shared_lock<std::shared_mutex> lock(tree_latch_);
-            if (root_) {
-                auto tree_results = search_recursive(root_.get(), key, txn);
-
-                if (config_.enable_delta_buffer) {
-                    auto del_keys = delta_buffer_.deleted_keys();
-                    for (auto* r : tree_results) {
-                        if (del_keys.find(r->key) == del_keys.end())
-                            combined.push_back(r);
-                    }
-                } else {
-                    combined.insert(combined.end(),
-                                    tree_results.begin(), tree_results.end());
+        auto descend = [&]() {
+            if (!root_) return;
+            std::vector<Record*> tree_results =
+                (clean ? search_fast_recursive(root_.get(), key)
+                       : search_recursive(root_.get(), key, txn));
+            if (!delta_empty) {
+                auto del_keys = delta_buffer_.deleted_keys();
+                for (auto* r : tree_results) {
+                    if (del_keys.find(r->key) == del_keys.end())
+                        combined.push_back(r);
                 }
+            } else {
+                combined.insert(combined.end(),
+                                tree_results.begin(), tree_results.end());
             }
-        }
+        };
 
+        if (config_.single_threaded) {
+            descend();
+        } else {
+            std::shared_lock<std::shared_mutex> lock(tree_latch_);
+            descend();
+        }
         return combined;
     }
 
@@ -788,31 +954,53 @@ public:
     std::vector<Record*> range_search(CompositeKey low, CompositeKey high,
                                       TxnId txn) const {
         KeyRange range{low, high};
+
+        const bool delta_empty = !config_.enable_delta_buffer
+                              || delta_buffer_.is_empty();
+        const bool clean = (total_tombstones_.load(std::memory_order_relaxed) == 0
+                         && txn == TXN_COMMITTED);
+
+        // Fast path: single-threaded + clean tree + empty delta buffer.
+        if (config_.single_threaded && clean && delta_empty) {
+            std::vector<Record*> out;
+            if (!root_) return out;
+            range_search_fast_recursive(root_.get(), range, out);
+            return out;
+        }
+
         std::vector<Record*> combined;
 
-        if (config_.enable_delta_buffer) {
+        if (!delta_empty) {
             auto delta_results =
                 const_cast<DeltaBuffer&>(delta_buffer_).range_search(range, txn);
             combined.insert(combined.end(), delta_results.begin(), delta_results.end());
         }
 
-        {
-            std::shared_lock<std::shared_mutex> lock(tree_latch_);
-            if (root_) {
-                std::vector<Record*> tree_results;
+        auto descend = [&]() {
+            if (!root_) return;
+            std::vector<Record*> tree_results;
+            if (clean) {
+                range_search_fast_recursive(root_.get(), range, tree_results);
+            } else {
                 range_search_recursive(root_.get(), range, txn, tree_results);
-
-                if (config_.enable_delta_buffer) {
-                    auto del_keys = delta_buffer_.deleted_keys();
-                    for (auto* r : tree_results) {
-                        if (del_keys.find(r->key) == del_keys.end())
-                            combined.push_back(r);
-                    }
-                } else {
-                    combined.insert(combined.end(),
-                                    tree_results.begin(), tree_results.end());
-                }
             }
+            if (!delta_empty) {
+                auto del_keys = delta_buffer_.deleted_keys();
+                for (auto* r : tree_results) {
+                    if (del_keys.find(r->key) == del_keys.end())
+                        combined.push_back(r);
+                }
+            } else {
+                combined.insert(combined.end(),
+                                tree_results.begin(), tree_results.end());
+            }
+        };
+
+        if (config_.single_threaded) {
+            descend();
+        } else {
+            std::shared_lock<std::shared_mutex> lock(tree_latch_);
+            descend();
         }
 
         return combined;
@@ -828,9 +1016,18 @@ public:
     std::vector<Record*> predicate_search(const PredicateSet& preds,
                                           TxnId txn) const {
         std::vector<Record*> results;
-        std::shared_lock<std::shared_mutex> lock(tree_latch_);
-        if (root_)
-            predicate_search_recursive(root_.get(), preds, txn, results);
+        const bool clean = (total_tombstones_.load(std::memory_order_relaxed) == 0
+                         && txn == TXN_COMMITTED);
+        auto run = [&]() {
+            if (root_)
+                predicate_search_recursive(root_.get(), preds, txn, results, clean);
+        };
+        if (config_.single_threaded) {
+            run();
+        } else {
+            std::shared_lock<std::shared_mutex> lock(tree_latch_);
+            run();
+        }
         return results;
     }
 
@@ -840,38 +1037,50 @@ public:
     HPTreeIterator begin(CompositeKey start = COMPOSITE_KEY_MIN,
                          CompositeKey end = COMPOSITE_KEY_MAX,
                          TxnId txn = TXN_COMMITTED) {
-        flush_delta_if_needed();
+        if (!delta_buffer_.is_empty()) flush_delta_if_needed();
+        const bool clean = (total_tombstones_.load(std::memory_order_relaxed) == 0
+                         && txn == TXN_COMMITTED);
+        auto build = [&]() -> HPTreeIterator {
+            if (!root_) return HPTreeIterator();
+            auto* leaf = find_leaf_for_key(root_.get(), start);
+            if (!leaf) return HPTreeIterator();
+            size_t idx = 0;
+            for (size_t i = 0; i < leaf->records.size(); ++i) {
+                if (leaf->records[i].key >= start) { idx = i; break; }
+            }
+            return HPTreeIterator(leaf, idx, KeyRange{start, end}, txn,
+                                  ScanDirection::FORWARD, nullptr, &schema_,
+                                  &leaf_map_, clean);
+        };
+        if (config_.single_threaded) return build();
         std::shared_lock<std::shared_mutex> lock(tree_latch_);
-        if (!root_) return HPTreeIterator();
-        auto* leaf = find_leaf_for_key(root_.get(), start);
-        if (!leaf) return HPTreeIterator();
-        size_t idx = 0;
-        for (size_t i = 0; i < leaf->records.size(); ++i) {
-            if (leaf->records[i].key >= start) { idx = i; break; }
-        }
-        return HPTreeIterator(leaf, idx, KeyRange{start, end}, txn,
-                              ScanDirection::FORWARD, nullptr, &schema_,
-                              &leaf_map_);
+        return build();
     }
 
     HPTreeIterator rbegin(CompositeKey start = COMPOSITE_KEY_MAX,
                           CompositeKey end = COMPOSITE_KEY_MIN,
                           TxnId txn = TXN_COMMITTED) {
-        flush_delta_if_needed();
+        if (!delta_buffer_.is_empty()) flush_delta_if_needed();
+        const bool clean = (total_tombstones_.load(std::memory_order_relaxed) == 0
+                         && txn == TXN_COMMITTED);
+        auto build = [&]() -> HPTreeIterator {
+            if (!root_) return HPTreeIterator();
+            auto* leaf = find_leaf_for_key(root_.get(), start);
+            if (!leaf) {
+                leaf = find_rightmost_leaf(root_.get());
+                if (!leaf) return HPTreeIterator();
+            }
+            size_t idx = leaf->records.empty() ? 0 : leaf->records.size() - 1;
+            for (size_t i = leaf->records.size(); i > 0; --i) {
+                if (leaf->records[i - 1].key <= start) { idx = i - 1; break; }
+            }
+            return HPTreeIterator(leaf, idx, KeyRange{end, start}, txn,
+                                  ScanDirection::REVERSE, nullptr, &schema_,
+                                  &leaf_map_, clean);
+        };
+        if (config_.single_threaded) return build();
         std::shared_lock<std::shared_mutex> lock(tree_latch_);
-        if (!root_) return HPTreeIterator();
-        auto* leaf = find_leaf_for_key(root_.get(), start);
-        if (!leaf) {
-            leaf = find_rightmost_leaf(root_.get());
-            if (!leaf) return HPTreeIterator();
-        }
-        size_t idx = leaf->records.empty() ? 0 : leaf->records.size() - 1;
-        for (size_t i = leaf->records.size(); i > 0; --i) {
-            if (leaf->records[i - 1].key <= start) { idx = i - 1; break; }
-        }
-        return HPTreeIterator(leaf, idx, KeyRange{end, start}, txn,
-                              ScanDirection::REVERSE, nullptr, &schema_,
-                              &leaf_map_);
+        return build();
     }
 
     // ======================================================================
@@ -902,18 +1111,68 @@ public:
                             CompositeKey high = COMPOSITE_KEY_MAX,
                             TxnId txn = TXN_COMMITTED) const {
         AggResult agg;
-        auto results = range_search(low, high, txn);
-        CompositeKeyEncoder encoder(schema_);
-        for (auto* r : results) {
-            double v = static_cast<double>(encoder.extract_dim(r->key, dim_idx));
-            agg.count++;
-            agg.sum += v;
-            if (v < agg.min_v) agg.min_v = v;
-            if (v > agg.max_v) agg.max_v = v;
-        }
-        if (agg.count > 0) agg.avg = agg.sum / agg.count;
+        if (!root_) return agg;
+        aggregate_dim_recursive(root_.get(), dim_idx, low, high, txn, agg);
+        if (agg.count > 0) agg.avg = agg.sum / static_cast<double>(agg.count);
         return agg;
     }
+
+private:
+    void aggregate_dim_recursive(HPNode* node, size_t dim_idx,
+                                 CompositeKey low, CompositeKey high,
+                                 TxnId txn, AggResult& agg) const {
+        if (!node) return;
+        const auto& r = node->meta.range;
+        if (r.high < low || r.low > high) return;
+
+        bool fully_contained = (r.low >= low && r.high <= high);
+
+        if (node->is_leaf()) {
+            auto* leaf = static_cast<LeafNode*>(node);
+            bool can_use_precomputed =
+                config_.enable_aggregates
+                && fully_contained
+                && txn == TXN_COMMITTED
+                && leaf->meta.tombstone_count == 0
+                && dim_idx < leaf->aggregates.dims.size();
+            if (can_use_precomputed) {
+                const auto& stats = leaf->aggregates.dims[dim_idx];
+                if (stats.count_non_null > 0) {
+                    agg.count += stats.count_non_null;
+                    agg.sum   += stats.sum;
+                    if (stats.min_val < agg.min_v) agg.min_v = stats.min_val;
+                    if (stats.max_val > agg.max_v) agg.max_v = stats.max_val;
+                }
+                return;
+            }
+        }
+
+        if (node->is_leaf()) {
+            auto* leaf = static_cast<LeafNode*>(node);
+            CompositeKeyEncoder encoder(schema_);
+            Record lo_rec{low}, hi_rec{high};
+            auto start = std::lower_bound(leaf->records.begin(), leaf->records.end(),
+                lo_rec, [](const Record& a, const Record& b){ return a.key < b.key; });
+            auto end   = std::upper_bound(leaf->records.begin(), leaf->records.end(),
+                hi_rec, [](const Record& a, const Record& b){ return a.key < b.key; });
+            for (auto it = start; it != end; ++it) {
+                if (it->tombstone || !it->version.is_visible(txn)) continue;
+                double v = static_cast<double>(encoder.extract_dim(it->key, dim_idx));
+                agg.count++;
+                agg.sum += v;
+                if (v < agg.min_v) agg.min_v = v;
+                if (v > agg.max_v) agg.max_v = v;
+            }
+            return;
+        }
+
+        auto* internal = static_cast<InternalNode*>(node);
+        for (auto& child : internal->children) {
+            aggregate_dim_recursive(child.get(), dim_idx, low, high, txn, agg);
+        }
+    }
+
+public:
 
     std::unordered_map<uint64_t, uint64_t>
     group_by_count(size_t dim_idx, const PredicateSet& preds = {},
@@ -951,6 +1210,10 @@ public:
     //  MAINTENANCE
     // ======================================================================
     void flush_delta() {
+        if (config_.single_threaded) {
+            flush_delta_buffer_locked();
+            return;
+        }
         std::unique_lock<std::shared_mutex> lock(tree_latch_);
         flush_delta_buffer_locked();
     }
@@ -1106,6 +1369,10 @@ private:
     void flush_delta_if_needed() {
         if (config_.enable_delta_buffer &&
             delta_buffer_.needs_flush(total_records_.load())) {
+            if (config_.single_threaded) {
+                flush_delta_buffer_locked();
+                return;
+            }
             std::unique_lock<std::shared_mutex> lock(tree_latch_);
             flush_delta_buffer_locked();
         }
