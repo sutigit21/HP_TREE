@@ -110,23 +110,31 @@ struct CompositeKeySchema {
     std::vector<DimensionDesc> dimensions;
     size_t total_bits = 0;
 
+    // Precomputed per-dim offsets/masks — filled by finalize().  Cached here
+    // so the hot paths (PredicateSet::evaluate / to_key_range) don't pay an
+    // O(dim_count) linear scan every time they extract a dimension value.
+    std::array<uint8_t,  MAX_DIMS> cached_offsets{};
+    std::array<uint64_t, MAX_DIMS> cached_masks{};
+
     void finalize() {
         total_bits = 0;
         for (auto& d : dimensions) {
             if (d.nullable) d.init_null_sentinel();
             total_bits += d.bits;
         }
+        // Populate offset/mask caches — offset_of(i) is the bit offset of dim i
+        // from the LSB, counting bits of dims [i+1 .. end).
+        for (size_t i = 0; i < dimensions.size() && i < MAX_DIMS; ++i) {
+            uint8_t off = 0;
+            for (size_t j = i + 1; j < dimensions.size(); ++j)
+                off += dimensions[j].bits;
+            cached_offsets[i] = off;
+            cached_masks[i]   = (1ULL << dimensions[i].bits) - 1;
+        }
     }
     size_t  dim_count() const { return dimensions.size(); }
-    uint8_t offset_of(size_t dim_idx) const {
-        uint8_t off = 0;
-        for (size_t i = dim_idx + 1; i < dimensions.size(); ++i)
-            off += dimensions[i].bits;
-        return off;
-    }
-    uint64_t mask_of(size_t dim_idx) const {
-        return (1ULL << dimensions[dim_idx].bits) - 1;
-    }
+    uint8_t offset_of(size_t dim_idx) const { return cached_offsets[dim_idx]; }
+    uint64_t mask_of(size_t dim_idx) const  { return cached_masks[dim_idx]; }
 };
 
 using CompositeKey = __uint128_t;

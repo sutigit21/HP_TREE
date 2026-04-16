@@ -43,23 +43,33 @@ inline std::vector<DatasetRecord> load_dataset(const std::string& path) {
     }
 
     char magic[8];
-    in.read(magic, 8);
+    if (!in.read(magic, 8)) {
+        std::cerr << "ERROR: failed reading magic from " << path << "\n";
+        std::exit(2);
+    }
     if (std::memcmp(magic, DATASET_MAGIC, 8) != 0) {
         std::cerr << "ERROR: bad magic in " << path << "\n";
         std::exit(2);
     }
 
     uint64_t n = 0;
-    in.read(reinterpret_cast<char*>(&n), sizeof(n));
+    if (!in.read(reinterpret_cast<char*>(&n), sizeof(n))) {
+        std::cerr << "ERROR: failed reading record count from " << path << "\n";
+        std::exit(2);
+    }
 
     std::vector<DatasetRecord> recs;
     recs.resize(static_cast<size_t>(n));
 
     for (uint64_t i = 0; i < n; ++i) {
         uint64_t lo = 0, hi = 0, v = 0;
-        in.read(reinterpret_cast<char*>(&lo), sizeof(lo));
-        in.read(reinterpret_cast<char*>(&hi), sizeof(hi));
-        in.read(reinterpret_cast<char*>(&v),  sizeof(v));
+        if (!in.read(reinterpret_cast<char*>(&lo), sizeof(lo)) ||
+            !in.read(reinterpret_cast<char*>(&hi), sizeof(hi)) ||
+            !in.read(reinterpret_cast<char*>(&v),  sizeof(v))) {
+            std::cerr << "ERROR: truncated dataset " << path
+                      << " at record " << i << " of " << n << "\n";
+            std::exit(2);
+        }
         hptree::CompositeKey k = (static_cast<hptree::CompositeKey>(hi) << 64)
                                | static_cast<hptree::CompositeKey>(lo);
         recs[i] = {k, v};

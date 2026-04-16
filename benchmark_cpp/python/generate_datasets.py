@@ -300,8 +300,6 @@ def main():
 
     args.outdir.mkdir(parents=True, exist_ok=True)
 
-    sample_keys_for_spec = None
-
     dist_order = ["uniform", "clustered", "skewed", "sequential"]
     for dist in args.distributions:
         if dist not in DISTRIBUTIONS:
@@ -316,17 +314,25 @@ def main():
         write_dataset(path, records)
         print(f"       wrote {path}  ({path.stat().st_size / 1e6:.1f} MB)")
 
-        if sample_keys_for_spec is None:
-            sample_keys_for_spec = [k for k, _ in records]
-
-    # Build query spec from the first generated distribution's keys
-    if sample_keys_for_spec is not None:
-        spec_rng = random.Random(args.seed + 1)
-        spec = build_query_spec(args.n, spec_rng, sample_keys_for_spec, None)
-        spec_path = args.outdir / "query_spec.json"
+        # Per-distribution query spec — point-lookup and delete keys must be
+        # drawn from THIS distribution's keys to actually hit records.
+        sample_keys = [k for k, _ in records]
+        spec_rng = random.Random(args.seed + 1 + dist_order.index(dist) * 1000)
+        spec = build_query_spec(args.n, spec_rng, sample_keys, None)
+        spec_path = args.outdir / f"query_spec_{dist}.json"
         with open(spec_path, "w") as f:
             json.dump(spec, f)
-        print(f"[gen] wrote {spec_path}")
+        print(f"       wrote {spec_path}")
+
+    # Back-compat default spec (uniform) for tooling that expects query_spec.json.
+    default_src = args.outdir / "query_spec_uniform.json"
+    if default_src.exists():
+        default_dst = args.outdir / "query_spec.json"
+        with open(default_src) as f:
+            default = f.read()
+        with open(default_dst, "w") as f:
+            f.write(default)
+        print(f"[gen] wrote {default_dst} (= query_spec_uniform.json)")
 
 
 if __name__ == "__main__":

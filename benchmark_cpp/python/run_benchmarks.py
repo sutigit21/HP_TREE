@@ -84,9 +84,9 @@ def correctness_match(bp, hp):
     # Checksums only match when both runners deterministically visit the same
     # records in the same logical set. Insert/delete counts already covered.
     # For queries that XOR over a set, XOR is order-independent.
+    # Checksums XOR over the matched set and are order-independent; a mismatch
+    # always means a real correctness divergence.
     if bp["checksum"] != hp["checksum"]:
-        # allow mismatch only for queries where iteration order differs
-        # (Q13 stores nothing checksum-wise)
         return False
     return True
 
@@ -179,19 +179,21 @@ def main():
             print("       Build with: cmake -B build && cmake --build build")
             sys.exit(1)
 
-    spec = args.datasets_dir / "query_spec.json"
-    if not spec.exists():
-        print(f"ERROR: query spec not found: {spec}")
-        print("       Generate with: python generate_datasets.py")
-        sys.exit(1)
-
     all_results = {}
     for dist in args.distributions:
         dataset = args.datasets_dir / f"{dist}.bin"
         if not dataset.exists():
             print(f"WARN: missing {dataset}, skipping")
             continue
-        print(f"\n--- {dist} ---")
+        # Prefer per-distribution spec; fall back to shared spec for old layouts.
+        spec = args.datasets_dir / f"query_spec_{dist}.json"
+        if not spec.exists():
+            spec = args.datasets_dir / "query_spec.json"
+        if not spec.exists():
+            print(f"ERROR: query spec not found for {dist}: {spec}")
+            print("       Regenerate with: python generate_datasets.py")
+            sys.exit(1)
+        print(f"\n--- {dist} --- (spec: {spec.name})")
         bp_json = run_runner(bplus_runner, dataset, spec,
                              args.results_dir / f"bplus_{dist}.json", dist)
         hp_json = run_runner(hp_runner, dataset, spec,

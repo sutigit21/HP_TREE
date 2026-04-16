@@ -24,11 +24,12 @@ struct NodeBase {
     uint16_t level;       // 0 => leaf, >0 => inner
     uint16_t slotuse;
 
-    // Beta metadata maintained during bulk_load / insert / erase.
+    // range_lo / range_hi drive all query-path pruning.  beta_value and
+    // is_homogeneous used to live here but were never read by any query —
+    // they were removed to shrink the node and eliminate compute_beta() calls
+    // on bulk_load / split / remove hot paths.
     CompositeKey range_lo;
     CompositeKey range_hi;
-    double       beta_value;
-    bool         is_homogeneous;
 
     bool is_leaf() const { return level == 0; }
 };
@@ -48,26 +49,22 @@ struct LeafNode : public NodeBase {
         next_leaf = nullptr;
         range_lo = COMPOSITE_KEY_MAX;
         range_hi = COMPOSITE_KEY_MIN;
-        beta_value = 0.0;
-        is_homogeneous = true;
     }
 
     bool is_full()      const { return slotuse >= LEAF_SLOTMAX; }
     bool is_few()       const { return slotuse <= LEAF_SLOTMIN; }
     bool is_underflow() const { return slotuse < LEAF_SLOTMIN; }
 
-    void recompute_range_beta() {
+    // Cheap range refresh from the sorted key array.  No beta/homogeneity
+    // computation — those fields were removed because no query reads them.
+    void recompute_range() {
         if (slotuse == 0) {
             range_lo = COMPOSITE_KEY_MAX;
             range_hi = COMPOSITE_KEY_MIN;
-            beta_value = 0.0;
-            is_homogeneous = true;
             return;
         }
         range_lo = keys[0];
         range_hi = keys[slotuse - 1];
-        beta_value = BetaComputer::compute_beta(range_lo, range_hi);
-        is_homogeneous = (range_lo == range_hi);
     }
 };
 
@@ -87,8 +84,6 @@ struct InnerNode : public NodeBase {
         slotuse = 0;
         range_lo = COMPOSITE_KEY_MAX;
         range_hi = COMPOSITE_KEY_MIN;
-        beta_value = 0.0;
-        is_homogeneous = true;
         subtree_count = 0;
         for (size_t d = 0; d < dim_count; ++d) dim_stats[d] = DimStats{};
     }

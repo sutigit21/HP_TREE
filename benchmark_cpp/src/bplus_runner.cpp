@@ -373,6 +373,175 @@ int main(int argc, char** argv) {
                   << total_hits << "\n";
     }
 
+    // Schema dim constants (must match make_default_sales_schema)
+    constexpr size_t DIM_YEAR = 0, DIM_MONTH = 1, /*DIM_DAY=2,*/
+                     DIM_STATE = 3, DIM_PRODUCT = 4, DIM_PRICE = 5;
+    constexpr uint64_t YEAR_2021 = 21, YEAR_2022 = 22;
+
+    // =========================================================================
+    //  Q16: Top-K groups —
+    //        WHERE year=2022 GROUP BY product SUM(price) ORDER BY sum DESC LIMIT 5
+    // =========================================================================
+    {
+        bench::Timer t;
+        std::unordered_map<uint64_t, std::pair<uint64_t,double>> groups;
+        for (auto it = tree.begin(); it != tree.end(); ++it) {
+            if (extract_dim_u64(schema, it->first, DIM_YEAR) != YEAR_2022) continue;
+            uint64_t g = extract_dim_u64(schema, it->first, DIM_PRODUCT);
+            double v = static_cast<double>(extract_dim_u64(schema, it->first, DIM_PRICE));
+            auto& e = groups[g];
+            e.first++; e.second += v;
+        }
+        std::vector<std::pair<uint64_t,double>> ranked;
+        ranked.reserve(groups.size());
+        for (auto& [g, v] : groups) ranked.emplace_back(g, v.second);
+        constexpr size_t K = 5;
+        size_t take = std::min(K, ranked.size());
+        std::partial_sort(ranked.begin(), ranked.begin() + take, ranked.end(),
+                          [](const auto& a, const auto& b){ return a.second > b.second; });
+        double ms = t.elapsed_ms();
+        double top_sum = 0; uint64_t chk = 0;
+        for (size_t i = 0; i < take; ++i) {
+            top_sum += ranked[i].second;
+            chk ^= (ranked[i].first * 0x9E3779B97F4A7C15ULL)
+                 ^ static_cast<uint64_t>(ranked[i].second);
+        }
+        results.push_back({ "Q16_topk_groups", ms, take, top_sum, chk,
+                            std::to_string(groups.size()) + " groups" });
+        std::cerr << "[bplus] Q16 topk_groups " << ms << "ms  top" << take
+                  << "_sum=" << top_sum << "\n";
+    }
+
+    // =========================================================================
+    //  Q17: HAVING —
+    //        GROUP BY state SUM(price) HAVING sum > threshold  (all records)
+    // =========================================================================
+    {
+        constexpr double HAVING_THRESHOLD = 5.0e9;
+        bench::Timer t;
+        std::unordered_map<uint64_t, double> sums;
+        for (auto it = tree.begin(); it != tree.end(); ++it) {
+            uint64_t g = extract_dim_u64(schema, it->first, DIM_STATE);
+            double v = static_cast<double>(extract_dim_u64(schema, it->first, DIM_PRICE));
+            sums[g] += v;
+        }
+        uint64_t kept = 0; double kept_sum = 0; uint64_t chk = 0;
+        for (auto& [g, s] : sums) {
+            if (s > HAVING_THRESHOLD) {
+                kept++; kept_sum += s;
+                chk ^= (g * 0x9E3779B97F4A7C15ULL) ^ static_cast<uint64_t>(s);
+            }
+        }
+        double ms = t.elapsed_ms();
+        results.push_back({ "Q17_having_clause", ms, kept, kept_sum, chk,
+                            std::to_string(sums.size()) + " groups total" });
+        std::cerr << "[bplus] Q17 having_clause " << ms << "ms  kept="
+                  << kept << "/" << sums.size() << "\n";
+    }
+
+    // =========================================================================
+    //  Q18: Year/Month Rollup —
+    //        year IN [20,23] GROUP BY (year,month) SUM(price) COUNT(*)
+    //        + compute per-year totals (rollup)
+    // =========================================================================
+    {
+        bench::Timer t;
+        std::unordered_map<uint64_t, std::pair<uint64_t,double>> ym;
+        auto it  = tree.lower_bound(qs.wide_range.lo);
+        auto end = tree.upper_bound(qs.wide_range.hi);
+        for (; it != end; ++it) {
+            uint64_t y = extract_dim_u64(schema, it->first, DIM_YEAR);
+            uint64_t m = extract_dim_u64(schema, it->first, DIM_MONTH);
+            double v = static_cast<double>(extract_dim_u64(schema, it->first, DIM_PRICE));
+            auto& e = ym[(y << 4) | m];
+            e.first++; e.second += v;
+        }
+        std::unordered_map<uint64_t, std::pair<uint64_t,double>> yr_totals;
+        for (auto& [k, v] : ym) {
+            auto& e = yr_totals[k >> 4];
+            e.first  += v.first;
+            e.second += v.second;
+        }
+        double ms = t.elapsed_ms();
+        double total_sum = 0; uint64_t total_cnt = 0; uint64_t chk = 0;
+        for (auto& [k, v] : ym) {
+            total_sum += v.second; total_cnt += v.first;
+            chk ^= (k * 0x9E3779B97F4A7C15ULL) ^ static_cast<uint64_t>(v.second);
+        }
+        results.push_back({ "Q18_ym_rollup", ms, total_cnt, total_sum, chk,
+                            std::to_string(ym.size()) + " ym / "
+                            + std::to_string(yr_totals.size()) + " yr" });
+        std::cerr << "[bplus] Q18 ym_rollup " << ms << "ms  ym_groups="
+                  << ym.size() << " yr_groups=" << yr_totals.size() << "\n";
+    }
+
+    // =========================================================================
+    //  Q19: Correlated multi-dim partition —
+    //        COUNT(*) WHERE price > AVG(price) PARTITION BY (state,product)
+    // =========================================================================
+    {
+        bench::Timer t;
+        std::unordered_map<uint64_t, std::pair<uint64_t,double>> stats;
+        for (auto it = tree.begin(); it != tree.end(); ++it) {
+            uint64_t s = extract_dim_u64(schema, it->first, DIM_STATE);
+            uint64_t p = extract_dim_u64(schema, it->first, DIM_PRODUCT);
+            uint64_t g = (s << 8) | p;
+            double v = static_cast<double>(extract_dim_u64(schema, it->first, DIM_PRICE));
+            auto& e = stats[g];
+            e.first++; e.second += v;
+        }
+        std::unordered_map<uint64_t, double> means;
+        means.reserve(stats.size());
+        for (auto& [g, s] : stats)
+            means[g] = s.first > 0 ? s.second / static_cast<double>(s.first) : 0.0;
+
+        uint64_t above = 0;
+        for (auto it = tree.begin(); it != tree.end(); ++it) {
+            uint64_t s = extract_dim_u64(schema, it->first, DIM_STATE);
+            uint64_t p = extract_dim_u64(schema, it->first, DIM_PRODUCT);
+            uint64_t g = (s << 8) | p;
+            double v = static_cast<double>(extract_dim_u64(schema, it->first, DIM_PRICE));
+            auto m = means.find(g);
+            if (m != means.end() && v > m->second) above++;
+        }
+        double ms = t.elapsed_ms();
+        results.push_back({ "Q19_corr_multi_dim", ms, above, 0.0, 0,
+                            std::to_string(stats.size()) + " partitions" });
+        std::cerr << "[bplus] Q19 corr_multi_dim " << ms << "ms  above=" << above
+                  << " partitions=" << stats.size() << "\n";
+    }
+
+    // =========================================================================
+    //  Q20: Semi-join / YoY growth —
+    //        COUNT(product) WHERE SUM(price)[yr=2022] > SUM(price)[yr=2021]
+    // =========================================================================
+    {
+        bench::Timer t;
+        std::unordered_map<uint64_t, double> sum_a, sum_b;
+        for (auto it = tree.begin(); it != tree.end(); ++it) {
+            uint64_t y = extract_dim_u64(schema, it->first, DIM_YEAR);
+            if (y != YEAR_2021 && y != YEAR_2022) continue;
+            uint64_t p = extract_dim_u64(schema, it->first, DIM_PRODUCT);
+            double v = static_cast<double>(extract_dim_u64(schema, it->first, DIM_PRICE));
+            if (y == YEAR_2021) sum_a[p] += v; else sum_b[p] += v;
+        }
+        uint64_t growers = 0; double delta = 0; uint64_t chk = 0;
+        for (auto& [p, sb] : sum_b) {
+            double sa = sum_a.count(p) ? sum_a[p] : 0.0;
+            if (sb > sa) {
+                growers++;
+                delta += sb - sa;
+                chk ^= (p * 0x9E3779B97F4A7C15ULL) ^ static_cast<uint64_t>(sb - sa);
+            }
+        }
+        double ms = t.elapsed_ms();
+        results.push_back({ "Q20_yoy_semijoin", ms, growers, delta, chk,
+                            std::to_string(sum_a.size()) + "a/"
+                            + std::to_string(sum_b.size()) + "b" });
+        std::cerr << "[bplus] Q20 yoy_semijoin " << ms << "ms  growers="
+                  << growers << " delta=" << delta << "\n";
+    }
+
     bench::write_results("bplus", dist_name, results, output_path);
     std::cerr << "[bplus] wrote " << output_path << "\n";
     return 0;
