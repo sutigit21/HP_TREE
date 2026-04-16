@@ -50,6 +50,10 @@ public:
     uint16_t  slot() const { return slot_; }
     bool      is_end() const { return leaf_ == nullptr; }
 
+    // Runner-style alias surface (no wrapper class needed).
+    bool valid() const { return leaf_ != nullptr; }
+    void next()        { ++(*this); }
+
 private:
     LeafNode* leaf_;
     uint16_t  slot_;

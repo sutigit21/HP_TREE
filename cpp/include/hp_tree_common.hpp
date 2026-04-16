@@ -39,6 +39,9 @@ static constexpr double  MIN_POSITIVE_VALUE       = 1e-7;
 static constexpr size_t  DEFAULT_BUFFER_POOL_SIZE = 1024;
 static constexpr size_t  DEFAULT_DELTA_BUFFER_CAP = 4096;
 static constexpr size_t  MAX_TREE_DEPTH           = 35;
+// Max supported schema dimensions.  Lets us keep dim_stats as a stack-inline
+// fixed array and avoid any per-node heap allocation for subtree aggregates.
+static constexpr size_t  MAX_DIMS                 = 8;
 
 enum class BetaStrategy : uint8_t {
     FIXED_STRICT    = 0,

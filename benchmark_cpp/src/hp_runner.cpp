@@ -126,15 +126,16 @@ int main(int argc, char** argv) {
     // =========================================================================
     {
         bench::Timer t;
-        auto rs = tree.range_search(qs.narrow_range.lo, qs.narrow_range.hi);
-        uint64_t chk = 0; double sum = 0;
-        for (auto& r : rs) {
-            chk ^= bench::key_checksum_u128(r.key);
-            sum += static_cast<double>(extract_dim_u64(schema, r.key, 5));
+        uint64_t cnt = 0, chk = 0; double sum = 0;
+        auto it = tree.lower_bound(qs.narrow_range.lo);
+        while (it.valid() && it.key() <= qs.narrow_range.hi) {
+            chk ^= bench::key_checksum_u128(it.key());
+            sum += static_cast<double>(extract_dim_u64(schema, it.key(), 5));
+            ++cnt; ++it;
         }
         double ms = t.elapsed_ms();
-        results.push_back({ "Q3_narrow_range", ms, rs.size(), sum, chk, "" });
-        std::cerr << "[hp] Q3 narrow_range " << ms << "ms  n=" << rs.size() << "\n";
+        results.push_back({ "Q3_narrow_range", ms, cnt, sum, chk, "" });
+        std::cerr << "[hp] Q3 narrow_range " << ms << "ms  n=" << cnt << "\n";
     }
 
     // =========================================================================
@@ -142,15 +143,16 @@ int main(int argc, char** argv) {
     // =========================================================================
     {
         bench::Timer t;
-        auto rs = tree.range_search(qs.wide_range.lo, qs.wide_range.hi);
-        uint64_t chk = 0; double sum = 0;
-        for (auto& r : rs) {
-            chk ^= bench::key_checksum_u128(r.key);
-            sum += static_cast<double>(extract_dim_u64(schema, r.key, 5));
+        uint64_t cnt = 0, chk = 0; double sum = 0;
+        auto it = tree.lower_bound(qs.wide_range.lo);
+        while (it.valid() && it.key() <= qs.wide_range.hi) {
+            chk ^= bench::key_checksum_u128(it.key());
+            sum += static_cast<double>(extract_dim_u64(schema, it.key(), 5));
+            ++cnt; ++it;
         }
         double ms = t.elapsed_ms();
-        results.push_back({ "Q4_wide_range", ms, rs.size(), sum, chk, "" });
-        std::cerr << "[hp] Q4 wide_range " << ms << "ms  n=" << rs.size() << "\n";
+        results.push_back({ "Q4_wide_range", ms, cnt, sum, chk, "" });
+        std::cerr << "[hp] Q4 wide_range " << ms << "ms  n=" << cnt << "\n";
     }
 
     // =========================================================================

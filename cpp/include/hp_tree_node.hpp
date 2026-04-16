@@ -5,7 +5,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <algorithm>
-#include <vector>
+#include <array>
 
 namespace hptree {
 
@@ -77,11 +77,12 @@ struct InnerNode : public NodeBase {
     NodeBase*    childid[INNER_SLOTMAX + 2];
 
     // Aggregated subtree stats (per-dimension) — enables beta-skip predicate
-    // pruning and O(1) range aggregates.  Sized at bulk_load time.
-    uint64_t              subtree_count;
-    std::vector<DimStats> dim_stats;
+    // pruning and O(1) range aggregates.  Fixed-size to avoid per-node heap
+    // allocation.  Only the first dim_count entries are meaningful.
+    uint64_t                           subtree_count;
+    std::array<DimStats, MAX_DIMS>     dim_stats;
 
-    void init(uint16_t lvl) {
+    void init(uint16_t lvl, size_t dim_count) {
         level = lvl;
         slotuse = 0;
         range_lo = COMPOSITE_KEY_MAX;
@@ -89,7 +90,7 @@ struct InnerNode : public NodeBase {
         beta_value = 0.0;
         is_homogeneous = true;
         subtree_count = 0;
-        dim_stats.clear();
+        for (size_t d = 0; d < dim_count; ++d) dim_stats[d] = DimStats{};
     }
 
     bool is_full()      const { return slotuse >= INNER_SLOTMAX; }
