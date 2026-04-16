@@ -553,6 +553,197 @@ int main(int argc, char** argv) {
                   << growers << " delta=" << delta << "\n";
     }
 
+    // =========================================================================
+    //  Q21: Complex OR-Bitmap --
+    //        UNION of three disjoint multi-dim predicate groups:
+    //          (year=2022 AND state=CA) OR
+    //          (year=2020 AND state=NY) OR
+    //          (year=2023 AND product=Laptop)
+    //        Each group has strong subtree pruning in HP-Tree.
+    // =========================================================================
+    {
+        constexpr uint64_t YEAR_2020 = 20, YEAR_2023 = 23;
+        constexpr uint64_t STATE_CA  = 1,  STATE_NY  = 9;
+        constexpr uint64_t PROD_LAPTOP = 5;
+        hptree::PredicateSet g1, g2, g3;
+        g1.predicates.push_back(hptree::Predicate::eq(DIM_YEAR,  static_cast<Key>(YEAR_2022)));
+        g1.predicates.push_back(hptree::Predicate::eq(DIM_STATE, static_cast<Key>(STATE_CA)));
+        g2.predicates.push_back(hptree::Predicate::eq(DIM_YEAR,  static_cast<Key>(YEAR_2020)));
+        g2.predicates.push_back(hptree::Predicate::eq(DIM_STATE, static_cast<Key>(STATE_NY)));
+        g3.predicates.push_back(hptree::Predicate::eq(DIM_YEAR,    static_cast<Key>(YEAR_2023)));
+        g3.predicates.push_back(hptree::Predicate::eq(DIM_PRODUCT, static_cast<Key>(PROD_LAPTOP)));
+
+        bench::Timer t;
+        uint64_t cnt = 0, chk = 0;
+        double sum = 0.0;
+        auto cb = [&](Key k, uint64_t){
+            ++cnt;
+            chk ^= bench::key_checksum_u128(k);
+            sum += static_cast<double>(extract_dim_u64(schema, k, DIM_PRICE));
+        };
+        tree.predicate_search_cb(g1, cb);
+        tree.predicate_search_cb(g2, cb);
+        tree.predicate_search_cb(g3, cb);
+        double ms = t.elapsed_ms();
+        results.push_back({ "Q21_or_bitmap", ms, cnt, sum, chk, "3 groups" });
+        std::cerr << "[hp] Q21 or_bitmap " << ms << "ms  n=" << cnt << "\n";
+    }
+
+    // =========================================================================
+    //  Q22: Windowed Top-3 per Month --
+    //        For each month m in year=2022:
+    //          SELECT state, SUM(price) GROUP BY state ORDER BY sum DESC LIMIT 3
+    //        Output: total SUM(top-3) across 12 months.
+    //        Emulates RANK() OVER (PARTITION BY month ORDER BY sum DESC).
+    // =========================================================================
+    {
+        bench::Timer t;
+        uint64_t total_rows = 0; double total_top3_sum = 0.0; uint64_t chk = 0;
+        for (uint64_t m = 1; m <= 12; ++m) {
+            hptree::PredicateSet ps;
+            ps.predicates.push_back(hptree::Predicate::eq(DIM_YEAR,  static_cast<Key>(YEAR_2022)));
+            ps.predicates.push_back(hptree::Predicate::eq(DIM_MONTH, static_cast<Key>(m)));
+            std::unordered_map<uint64_t, double> state_sum;
+            tree.predicate_search_cb(ps, [&](Key k, uint64_t){
+                uint64_t s = extract_dim_u64(schema, k, DIM_STATE);
+                state_sum[s] += static_cast<double>(extract_dim_u64(schema, k, DIM_PRICE));
+                ++total_rows;
+            });
+            std::vector<std::pair<uint64_t,double>> ranked(
+                state_sum.begin(), state_sum.end());
+            size_t take = std::min<size_t>(3, ranked.size());
+            if (take > 0) {
+                std::partial_sort(ranked.begin(), ranked.begin() + take, ranked.end(),
+                    [](const auto& a, const auto& b){ return a.second > b.second; });
+                for (size_t i = 0; i < take; ++i) {
+                    total_top3_sum += ranked[i].second;
+                    chk ^= (m * 0x100000001B3ULL)
+                         ^ (ranked[i].first * 0x9E3779B97F4A7C15ULL)
+                         ^ static_cast<uint64_t>(ranked[i].second);
+                }
+            }
+        }
+        double ms = t.elapsed_ms();
+        results.push_back({ "Q22_window_top3_month", ms, total_rows,
+                            total_top3_sum, chk, "12 months" });
+        std::cerr << "[hp] Q22 window_top3_month " << ms << "ms  top3_sum="
+                  << total_top3_sum << "\n";
+    }
+
+    // =========================================================================
+    //  Q23: Multi-Stage CTE / Correlated Subquery --
+    //        WITH s21 AS (SELECT state,product, AVG(price) AS avg21
+    //                     FROM t WHERE year=2021 GROUP BY state,product)
+    //        SELECT COUNT(*) FROM t JOIN s21 USING(state,product)
+    //        WHERE t.year=2022 AND t.price > s21.avg21
+    //        HP does two pruned predicate searches; B+ must fully scan.
+    // =========================================================================
+    {
+        bench::Timer t;
+        std::unordered_map<uint64_t, std::pair<uint64_t,double>> s21;
+        auto ps_21 = build_eq_predicate(DIM_YEAR, YEAR_2021);
+        tree.predicate_search_cb(ps_21, [&](Key k, uint64_t){
+            uint64_t s = extract_dim_u64(schema, k, DIM_STATE);
+            uint64_t p = extract_dim_u64(schema, k, DIM_PRODUCT);
+            uint64_t g = (s << 8) | p;
+            double v = static_cast<double>(extract_dim_u64(schema, k, DIM_PRICE));
+            auto& e = s21[g];
+            e.first++; e.second += v;
+        });
+        std::unordered_map<uint64_t, double> avg21;
+        avg21.reserve(s21.size());
+        for (auto& [g, rec] : s21)
+            avg21[g] = rec.first ? rec.second / static_cast<double>(rec.first) : 0.0;
+
+        auto ps_22 = build_eq_predicate(DIM_YEAR, YEAR_2022);
+        uint64_t above = 0; double above_sum = 0; uint64_t chk = 0;
+        tree.predicate_search_cb(ps_22, [&](Key k, uint64_t){
+            uint64_t s = extract_dim_u64(schema, k, DIM_STATE);
+            uint64_t p = extract_dim_u64(schema, k, DIM_PRODUCT);
+            uint64_t g = (s << 8) | p;
+            double v = static_cast<double>(extract_dim_u64(schema, k, DIM_PRICE));
+            auto it = avg21.find(g);
+            if (it != avg21.end() && v > it->second) {
+                above++; above_sum += v;
+                chk ^= bench::key_checksum_u128(k);
+            }
+        });
+        double ms = t.elapsed_ms();
+        results.push_back({ "Q23_cte_correlated", ms, above, above_sum, chk,
+                            std::to_string(avg21.size()) + " partitions" });
+        std::cerr << "[hp] Q23 cte_correlated " << ms << "ms  above="
+                  << above << "\n";
+    }
+
+    // =========================================================================
+    //  Q24: YoY Self-Join --
+    //        For each (state,product), join sum_2021 vs sum_2022; count
+    //        partitions where sum_2022 > sum_2021 * 1.2 (20% growth).
+    // =========================================================================
+    {
+        bench::Timer t;
+        std::unordered_map<uint64_t, double> sum_21, sum_22;
+        auto ps_21 = build_eq_predicate(DIM_YEAR, YEAR_2021);
+        auto ps_22 = build_eq_predicate(DIM_YEAR, YEAR_2022);
+        tree.predicate_search_cb(ps_21, [&](Key k, uint64_t){
+            uint64_t g = (extract_dim_u64(schema, k, DIM_STATE) << 8)
+                       |  extract_dim_u64(schema, k, DIM_PRODUCT);
+            sum_21[g] += static_cast<double>(extract_dim_u64(schema, k, DIM_PRICE));
+        });
+        tree.predicate_search_cb(ps_22, [&](Key k, uint64_t){
+            uint64_t g = (extract_dim_u64(schema, k, DIM_STATE) << 8)
+                       |  extract_dim_u64(schema, k, DIM_PRODUCT);
+            sum_22[g] += static_cast<double>(extract_dim_u64(schema, k, DIM_PRICE));
+        });
+        uint64_t growers = 0; double delta_sum = 0; uint64_t chk = 0;
+        for (auto& [g, s22] : sum_22) {
+            auto it = sum_21.find(g);
+            double s21 = (it != sum_21.end()) ? it->second : 0.0;
+            if (s22 > s21 * 1.2) {
+                growers++;
+                delta_sum += (s22 - s21);
+                chk ^= (g * 0x9E3779B97F4A7C15ULL)
+                     ^ static_cast<uint64_t>(s22 - s21);
+            }
+        }
+        double ms = t.elapsed_ms();
+        results.push_back({ "Q24_yoy_selfjoin", ms, growers, delta_sum, chk,
+                            std::to_string(sum_21.size()) + "/"
+                            + std::to_string(sum_22.size()) + " partitions" });
+        std::cerr << "[hp] Q24 yoy_selfjoin " << ms << "ms  growers="
+                  << growers << "\n";
+    }
+
+    // =========================================================================
+    //  Q25: Dense Hyperbox --
+    //        year IN [21..23] AND state IN {CA..GA idx 1..5} AND
+    //        product IN {Laptop..Mouse idx 5..7} AND price IN [30000..180000]
+    //        HP: multi-dim BETWEEN via predicate subtree pruning on 4 dims.
+    //        B+: full scan with 4 per-record predicates.
+    // =========================================================================
+    {
+        constexpr uint64_t Y_LO = 21, Y_HI = 23;
+        constexpr uint64_t S_LO = 1,  S_HI = 5;
+        constexpr uint64_t P_LO = 5,  P_HI = 7;
+        constexpr uint64_t PR_LO = 30000, PR_HI = 180000;
+        hptree::PredicateSet ps;
+        ps.predicates.push_back(hptree::Predicate::between(DIM_YEAR,    static_cast<Key>(Y_LO),  static_cast<Key>(Y_HI)));
+        ps.predicates.push_back(hptree::Predicate::between(DIM_STATE,   static_cast<Key>(S_LO),  static_cast<Key>(S_HI)));
+        ps.predicates.push_back(hptree::Predicate::between(DIM_PRODUCT, static_cast<Key>(P_LO),  static_cast<Key>(P_HI)));
+        ps.predicates.push_back(hptree::Predicate::between(DIM_PRICE,   static_cast<Key>(PR_LO), static_cast<Key>(PR_HI)));
+
+        bench::Timer t;
+        uint64_t cnt = 0, chk = 0; double sum = 0.0;
+        tree.predicate_search_cb(ps, [&](Key k, uint64_t){
+            ++cnt;
+            chk ^= bench::key_checksum_u128(k);
+            sum += static_cast<double>(extract_dim_u64(schema, k, DIM_PRICE));
+        });
+        double ms = t.elapsed_ms();
+        results.push_back({ "Q25_dense_hyperbox", ms, cnt, sum, chk, "4-dim box" });
+        std::cerr << "[hp] Q25 dense_hyperbox " << ms << "ms  n=" << cnt << "\n";
+    }
+
     bench::write_results("hp", dist_name, results, output_path);
     std::cerr << "[hp] wrote " << output_path << "\n";
     return 0;
