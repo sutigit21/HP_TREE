@@ -87,12 +87,9 @@ int main(int argc, char** argv) {
         recs.reserve(dataset.size());
         for (auto& r : dataset) {
             hptree::Record rec;
-            rec.key = r.key;
-            rec.payload.resize(8);
-            std::memcpy(rec.payload.data(), &r.value, sizeof(r.value));
-            rec.version.xmin = 1;
-            rec.version.xmax = hptree::TXN_COMMITTED;
-            recs.push_back(std::move(rec));
+            rec.key   = r.key;
+            rec.value = r.value;
+            recs.push_back(rec);
         }
         bench::Timer t;
         tree.bulk_load(std::move(recs));
@@ -114,9 +111,9 @@ int main(int argc, char** argv) {
         uint64_t hits = 0, chk = 0;
         for (auto k : qs.point_lookup_keys) {
             auto rs = tree.search(k);
-            for (auto* r : rs) {
+            for (auto& r : rs) {
                 hits++;
-                chk ^= bench::key_checksum_u128(r->key);
+                chk ^= bench::key_checksum_u128(r.key);
             }
         }
         double ms = t.elapsed_ms();
@@ -131,9 +128,9 @@ int main(int argc, char** argv) {
         bench::Timer t;
         auto rs = tree.range_search(qs.narrow_range.lo, qs.narrow_range.hi);
         uint64_t chk = 0; double sum = 0;
-        for (auto* r : rs) {
-            chk ^= bench::key_checksum_u128(r->key);
-            sum += static_cast<double>(extract_dim_u64(schema, r->key, 5));
+        for (auto& r : rs) {
+            chk ^= bench::key_checksum_u128(r.key);
+            sum += static_cast<double>(extract_dim_u64(schema, r.key, 5));
         }
         double ms = t.elapsed_ms();
         results.push_back({ "Q3_narrow_range", ms, rs.size(), sum, chk, "" });
@@ -147,9 +144,9 @@ int main(int argc, char** argv) {
         bench::Timer t;
         auto rs = tree.range_search(qs.wide_range.lo, qs.wide_range.hi);
         uint64_t chk = 0; double sum = 0;
-        for (auto* r : rs) {
-            chk ^= bench::key_checksum_u128(r->key);
-            sum += static_cast<double>(extract_dim_u64(schema, r->key, 5));
+        for (auto& r : rs) {
+            chk ^= bench::key_checksum_u128(r.key);
+            sum += static_cast<double>(extract_dim_u64(schema, r.key, 5));
         }
         double ms = t.elapsed_ms();
         results.push_back({ "Q4_wide_range", ms, rs.size(), sum, chk, "" });
@@ -164,7 +161,7 @@ int main(int argc, char** argv) {
         bench::Timer t;
         auto rs = tree.predicate_search(ps);
         uint64_t chk = 0;
-        for (auto* r : rs) chk ^= bench::key_checksum_u128(r->key);
+        for (auto& r : rs) chk ^= bench::key_checksum_u128(r.key);
         double ms = t.elapsed_ms();
         results.push_back({ "Q5_dim_filter", ms, rs.size(), 0.0, chk, "" });
         std::cerr << "[hp] Q5 dim_filter " << ms << "ms  n=" << rs.size() << "\n";
@@ -178,7 +175,7 @@ int main(int argc, char** argv) {
         bench::Timer t;
         auto rs = tree.predicate_search(ps);
         uint64_t chk = 0;
-        for (auto* r : rs) chk ^= bench::key_checksum_u128(r->key);
+        for (auto& r : rs) chk ^= bench::key_checksum_u128(r.key);
         double ms = t.elapsed_ms();
         results.push_back({ "Q6_multi_dim_filter", ms, rs.size(), 0.0, chk, "" });
         std::cerr << "[hp] Q6 multi_dim_filter " << ms << "ms  n=" << rs.size() << "\n";
@@ -203,7 +200,7 @@ int main(int argc, char** argv) {
     {
         bench::Timer t;
         uint64_t cnt = 0, chk = 0;
-        auto it = tree.begin();
+        auto it = tree.runner_begin();
         while (it.valid()) {
             cnt++;
             chk ^= bench::key_checksum_u128(it.key());
@@ -221,10 +218,8 @@ int main(int argc, char** argv) {
         bench::Timer t;
         for (size_t i = 0; i < qs.insert_keys.size(); ++i) {
             hptree::Record rec;
-            rec.key = qs.insert_keys[i];
-            rec.payload.resize(8);
-            uint64_t v = qs.insert_values[i];
-            std::memcpy(rec.payload.data(), &v, sizeof(v));
+            rec.key   = qs.insert_keys[i];
+            rec.value = qs.insert_values[i];
             tree.insert(rec);
         }
         tree.flush_delta();
@@ -258,7 +253,7 @@ int main(int argc, char** argv) {
         bench::Timer t;
         auto rs = tree.predicate_search(ps);
         uint64_t chk = 0;
-        for (auto* r : rs) chk ^= bench::key_checksum_u128(r->key);
+        for (auto& r : rs) chk ^= bench::key_checksum_u128(r.key);
         double ms = t.elapsed_ms();
         results.push_back({ "Q11_hypercube", ms, rs.size(), 0.0, chk, "" });
         std::cerr << "[hp] Q11 hypercube " << ms << "ms  n=" << rs.size() << "\n";
@@ -272,10 +267,10 @@ int main(int argc, char** argv) {
         bench::Timer t;
         auto rs = tree.predicate_search(ps);
         std::unordered_map<uint64_t, std::pair<uint64_t,double>> groups;
-        for (auto* r : rs) {
-            uint64_t g = extract_dim_u64(schema, r->key, qs.groupby.group_dim);
+        for (auto& r : rs) {
+            uint64_t g = extract_dim_u64(schema, r.key, qs.groupby.group_dim);
             double v = static_cast<double>(
-                extract_dim_u64(schema, r->key, qs.groupby.agg_dim));
+                extract_dim_u64(schema, r.key, qs.groupby.agg_dim));
             auto& e = groups[g];
             e.first++;
             e.second += v;
@@ -300,7 +295,7 @@ int main(int argc, char** argv) {
     {
         bench::Timer t;
         std::unordered_map<uint64_t, std::pair<uint64_t,double>> stats;
-        auto it = tree.begin();
+        auto it = tree.runner_begin();
         while (it.valid()) {
             Key k = it.key();
             uint64_t g = extract_dim_u64(schema, k, qs.correlated_group_dim);
@@ -317,7 +312,7 @@ int main(int argc, char** argv) {
             means[g] = s.first > 0 ? s.second / static_cast<double>(s.first) : 0.0;
 
         uint64_t above = 0;
-        auto it2 = tree.begin();
+        auto it2 = tree.runner_begin();
         while (it2.valid()) {
             Key k = it2.key();
             uint64_t g = extract_dim_u64(schema, k, qs.correlated_group_dim);
@@ -363,7 +358,7 @@ int main(int argc, char** argv) {
             auto ps = build_multi_eq_predicate(drill);
             auto rs = tree.predicate_search(ps);
             total_hits += rs.size();
-            for (auto* r : rs) chk ^= bench::key_checksum_u128(r->key);
+            for (auto& r : rs) chk ^= bench::key_checksum_u128(r.key);
         }
         double ms = t.elapsed_ms();
         results.push_back({ "Q15_adhoc_drill", ms, total_hits, 0.0, chk,
