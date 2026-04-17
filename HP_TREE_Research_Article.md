@@ -1,5 +1,5 @@
 ---
-title: "HP-Tree: A Breakthrough Multi-Dimensional Index Structure with Hierarchical Per-Subtree Aggregate Pruning"
+title: "HP-Tree: A Multi-Dimensional Index Structure with Hierarchical Per-Subtree Aggregate Pruning"
 author: "Sutirtha Chakraborty, Kingshuk Basak"
 date: "April 2026"
 geometry: margin=1in
