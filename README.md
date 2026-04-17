@@ -193,6 +193,6 @@ This project is provided for academic and research purposes.
 If you use this work in your research, please cite:
 
 ```
-Chakraborty, S. and Basak, K. (2026). "HP-Tree: A Breakthrough Multi-Dimensional
-Index Structure with Hierarchical Per-Subtree Aggregate Pruning."
+Chakraborty, S. and Basak, K. (2026). "HP-Tree: A Homogeneity-Partitioned
+Multi-Dimensional Index Structure with Per-Subtree Aggregate Pruning."
 ```

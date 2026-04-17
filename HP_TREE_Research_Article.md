@@ -12,6 +12,8 @@ header-includes:
   - \usepackage{booktabs}
   - \usepackage{float}
   - \floatplacement{table}{H}
+  - \usepackage{hyperref}
+  - \hypersetup{colorlinks=true, linkcolor=blue, urlcolor=blue, citecolor=blue}
   - \usepackage{fancyhdr}
   - \pagestyle{fancy}
   - \fancyhead[L]{HP-Tree}
@@ -23,7 +25,7 @@ header-includes:
 
 For over five decades, the B+ Tree has remained the default index structure in relational database systems, yet it is fundamentally constrained to a single dimension: records are sorted by one composite key, and any query that filters, aggregates, or groups along a non-prefix dimension must degrade to a full $O(N)$ scan. We present the **HP-Tree** (Homogeneity-Partitioned Tree), a breakthrough multi-dimensional index structure that resolves this fundamental limitation while preserving every strength of the B+ Tree. The HP-Tree introduces three architectural innovations that, together, constitute a paradigm shift in tree-structured indexing: (i) *hierarchical per-subtree dimensional statistics* (DimStats) --- min, max, count, and sum vectors at every inner node --- that transform the B+ Tree's unidimensional routing structure into a multi-dimensional pruning hierarchy capable of short-circuiting entire subtrees of $B^h$ records in $O(1)$; (ii) an *adaptive pruning-viability probe* that dynamically detects when DimStats-based descent yields no benefit and falls back to a cache-friendly leaf-chain walk, ensuring the HP-Tree is never slower than $O(N)$ on any query; and (iii) a *workload-adaptive leaf packing strategy* that tunes bulk-load fill factors to the expected query mix. We evaluate the HP-Tree against `tlx::btree_multimap` (v0.6.1) [11] --- a production-quality, cache-optimised C++ B+ Tree --- on $N = 10{,}000{,}000$ composite-key records across four data distributions and twenty-five query types. The HP-Tree **wins 69 of 100 query-distribution cells** with speedups reaching **$4{,}132\times$** on range aggregation and **$275\times$** on dimension filtering. In the 31 cells where the B+ Tree prevails, its advantage is marginal: a median of just $1.16\times$ and never exceeding $1.9\times$ on structurally comparable queries. These results demonstrate that the HP-Tree does not merely extend the B+ Tree --- it fundamentally transforms what a single tree-structured index can achieve.
 
-**Keywords:** multi-dimensional indexing, B+ Tree, composite keys, per-subtree aggregates, zone maps, analytical query processing, predicate pruning
+**Keywords:** multi-dimensional indexing, B+ Tree, composite keys, per-subtree aggregates, zone maps, analytical query processing, predicate pruning, distribution-aware indexing
 
 \newpage
 
@@ -37,6 +39,8 @@ However, the B+ Tree's architecture is fundamentally *unidimensional*. Records a
 
 This is not a minor inefficiency --- it is an architectural blind spot. In a retail analytics database with $10^7$ records, a query such as "compute total revenue by state for the year 2022" requires the B+ Tree to examine every record in the index, even though the answer involves only a fraction of the data. The entire field has accepted this limitation as inherent to tree-structured indexing and worked around it with auxiliary structures: secondary indexes, materialised views, column stores, bitmap indexes. **The HP-Tree demonstrates that this limitation is not inherent --- it can be resolved within the tree itself.**
 
+At a deeper level, the B+ Tree's limitation stems from the fact that it is **distribution-agnostic**: its internal routing structure --- separator keys and child pointers --- encodes no information whatsoever about the statistical properties of the data residing in each subtree. Whether a subtree contains tightly clustered records, uniformly spread records, or heavily skewed records, the B+ Tree's inner nodes are structurally identical. The tree cannot distinguish a subtree whose prices all fall within \$50--\$100 from one spanning \$0--\$5,000, because it simply does not record this information. This distribution-blindness is what forces every non-prefix query to degrade to $O(N)$. The HP-Tree is, to the best of our knowledge, the **first tree-structured index that is inherently distribution-aware**: its per-subtree DimStats capture the distributional footprint of each subtree across all dimensions, and its query-processing algorithms exploit this awareness to prune, short-circuit, or aggregate entire subtrees based on the actual distribution of data they contain.
+
 ### 1.2 Related Work
 
 The limitations of unidimensional indexing have motivated an extensive body of work on multi-dimensional access methods, each addressing a different facet of the problem at the cost of new trade-offs.
@@ -47,7 +51,7 @@ The limitations of unidimensional indexing have motivated an extensive body of w
 
 **Write-optimised and cache-conscious trees.** The Log-Structured Merge-Tree (LSM-Tree) [5] optimises write-heavy workloads by buffering mutations but provides no multi-dimensional pruning capability. Cache-conscious B+ Tree variants [9] improve main-memory performance by aligning node layouts with cache-line boundaries but address microarchitectural efficiency rather than the fundamental unidimensional limitation. The Adaptive Radix Tree (ART) [10] outperforms B+ Trees on point lookups through path compression and adaptive node sizes but operates on byte-addressable keys and does not support multi-dimensional predicate pruning.
 
-**The gap that the HP-Tree fills.** None of the structures surveyed above simultaneously satisfies the following four requirements: (a) $O(\log_B N)$ point lookups and efficient range scans on the primary key ordering; (b) sub-linear filtering on arbitrary secondary dimensions *without* auxiliary indexes or materialised views; (c) constant-time per-subtree aggregate computation for range-contained partitions; and (d) efficient dynamic insertions and deletions with bounded structural modification cost. The HP-Tree is the first index structure to satisfy all four.
+**The gap that the HP-Tree fills.** None of the structures surveyed above simultaneously satisfies the following four requirements: (a) $O(\log_B N)$ point lookups and efficient range scans on the primary key ordering; (b) sub-linear filtering on arbitrary secondary dimensions *without* auxiliary indexes or materialised views; (c) constant-time per-subtree aggregate computation for range-contained partitions; and (d) efficient dynamic insertions and deletions with bounded structural modification cost. The HP-Tree is the first index structure to satisfy all four. Crucially, it is also the first tree-structured index that is **distribution-aware** --- its per-subtree DimStats encode the distributional characteristics of the data within each subtree, enabling query-processing decisions that adapt to the data distribution rather than ignoring it.
 
 ### 1.3 Contributions
 
@@ -65,7 +69,7 @@ This paper introduces the HP-Tree, a fundamentally new class of tree-structured 
 
 These mechanisms are *intrinsic* to the tree's inner-node structure and require no external secondary indexes, materialised views, or auxiliary data structures. The HP-Tree preserves the B+ Tree's doubly-linked leaf chain, its logarithmic-height guarantee, and its compatibility with standard concurrency-control protocols [6].
 
-The complete HP-Tree implementation is open source and available at: **https://github.com/sutigit21/HP_TREE**
+The complete HP-Tree implementation is open source and available at: [\texttt{github.com/sutigit21/HP\_TREE}](https://github.com/sutigit21/HP_TREE)
 
 ### 1.4 Paper Organisation
 
@@ -129,7 +133,11 @@ $$\texttt{min\_val}_I[d] = \min_{r \in \text{subtree}(I)}\, \texttt{extract}(K_r
 
 $$\texttt{sum}_I[d] = \sum_{r \in \text{subtree}(I)}\, \texttt{extract}(K_r, d), \qquad \texttt{count}_I = |\text{subtree}(I)|$$
 
-These statistics are conceptually analogous to the **zone maps** (also termed *min-max indexes* or *small materialised aggregates*) used in column-oriented storage engines [7]. However, a critical distinction separates the HP-Tree's DimStats from column-store zone maps: in column stores, zone maps are associated with fixed-size storage blocks whose contents are determined by insertion order and bear no relation to data semantics. The HP-Tree's DimStats, by contrast, are maintained at *every level of the inner-node hierarchy* and are coupled to the tree's sort-order-driven partitioning. This hierarchical placement enables multi-level short-circuiting: a single DimStats check at level $h$ can prune an entire subtree of $B^h$ records.
+These statistics are conceptually analogous to the **zone maps** (also termed *min-max indexes* or *small materialised aggregates*) used in column-oriented storage engines [7]. However, two critical distinctions separate the HP-Tree's DimStats from column-store zone maps and from all prior tree indexes:
+
+*First, hierarchical placement.* In column stores, zone maps are associated with fixed-size storage blocks whose contents are determined by insertion order and bear no relation to data semantics. The HP-Tree's DimStats, by contrast, are maintained at *every level of the inner-node hierarchy* and are coupled to the tree's sort-order-driven partitioning. This hierarchical placement enables multi-level short-circuiting: a single DimStats check at level $h$ can prune an entire subtree of $B^h$ records.
+
+*Second, distribution awareness.* The B+ Tree is fundamentally **distribution-agnostic**: its inner nodes contain only separator keys and child pointers, encoding zero information about the statistical properties of the data in each subtree. Whether a subtree holds tightly clustered records or uniformly distributed records, the B+ Tree's routing structure is identical --- it cannot exploit distributional structure because it does not represent it. The HP-Tree's DimStats make the tree **distribution-aware**: each inner node carries a statistical summary ($\texttt{min\_val}$, $\texttt{max\_val}$, $\texttt{sum}$, $\texttt{count}$ per dimension) that reflects the actual distribution of data in its subtree. When data is clustered, DimStats bounds are tight and pruning is maximally effective. When data is sequential, DimStats bounds become disjoint partitions enabling near-perfect exclusion. Even on uniformly distributed data --- the worst case for any distribution-aware technique --- the adaptive pruning-viability probe (Section 2.5) detects the lack of pruning potential and falls back gracefully, ensuring the HP-Tree is never slower than the distribution-agnostic baseline. This distribution awareness is what enables the HP-Tree to achieve $275\times$ speedup on sequential data while remaining competitive on uniform data --- a range of behaviour that is fundamentally impossible for any distribution-agnostic index.
 
 **Construction during bulk load.** The bulk-load algorithm builds DimStats in two phases:
 
@@ -622,6 +630,8 @@ The results presented in Section 5 demonstrate that the HP-Tree represents a qua
 
 **Third, the magnitude asymmetry is definitive.** The HP-Tree's maximum speedup ($4{,}132\times$) exceeds the B+ Tree's maximum speedup ($2.82\times$) by a factor of $1{,}465$. More importantly, the HP-Tree achieves $>10\times$ speedup in 20 of 100 cells, while the B+ Tree never achieves $>3\times$ in any cell. This is not incremental improvement --- it is a change in the computational complexity class of the operations being performed.
 
+**Fourth, the HP-Tree is the first distribution-aware tree index.** The B+ Tree is distribution-agnostic: its routing structure is the same regardless of whether data is clustered, uniform, skewed, or sequential. The HP-Tree's DimStats, by contrast, automatically encode the distributional footprint of each subtree. This distribution awareness is not a heuristic --- it is a structural property of the index. When the data distribution creates tight per-subtree bounds (as in clustered or sequential data), the HP-Tree exploits this structure for orders-of-magnitude pruning. When the distribution is adversarial (uniform), the adaptive pruning-viability probe detects the lack of exploitable structure and falls back to the B+ Tree's scan strategy, incurring near-zero overhead. The result is an index that is never worse than $O(N)$ on any query but frequently achieves sub-linear performance by leveraging distributional properties that a distribution-agnostic index cannot even represent.
+
 ### 6.2 Three Tiers of HP-Tree Advantage
 
 The results reveal three distinct tiers of performance advantage, each attributable to a different architectural mechanism:
@@ -682,7 +692,7 @@ Critically, the performance profile is **asymmetric in the HP-Tree's favour**: w
 
 The HP-Tree is not an incremental improvement to the B+ Tree. It is a fundamentally new capability: **multi-dimensional pruning and constant-time aggregation within a single, dynamically updatable tree structure**, achieved at a space overhead of less than 0.2% of the record storage.
 
-The complete HP-Tree implementation is open source: **https://github.com/sutigit21/HP_TREE**
+The complete HP-Tree implementation is open source: [\texttt{github.com/sutigit21/HP\_TREE}](https://github.com/sutigit21/HP_TREE)
 
 ### 7.2 Future Work
 
