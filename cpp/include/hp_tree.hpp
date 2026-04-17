@@ -70,15 +70,21 @@ public:
         std::sort(recs.begin(), recs.end(),
                   [](const Record& a, const Record& b){ return a.key < b.key; });
 
-        // Build leaf level + per-leaf DimStats in one pass.
-        // Balance scan locality vs insert slack:
-        //   - Previous 75% (24/32) wasted 33% of scan bandwidth.
-        //   - Full-pack (30/32) caused Q9 split storms on clustered/skewed
-        //     data where inserts hit the same hot leaves repeatedly.
-        //   - 84% (27/32) keeps 5 slack slots — enough to absorb 1k inserts
-        //     across ~37k leaves without chaining splits, while still
-        //     delivering ~17% fewer leaves than the old 75% packing.
-        static constexpr uint16_t LEAF_PACK = (LEAF_SLOTMAX * 27) / 32;
+        double fill = config_.bulk_load_fill_factor;
+        if (fill < 0.0) {
+            switch (config_.workload_profile) {
+            case WorkloadProfile::ANALYTICAL:  fill = 0.7;  break;
+            case WorkloadProfile::SCAN_HEAVY:  fill = 0.95; break;
+            case WorkloadProfile::WRITE_HEAVY: fill = 0.7;  break;
+            case WorkloadProfile::BALANCED:    fill = 0.84; break;
+            case WorkloadProfile::CUSTOM:      fill = 0.84; break;
+            }
+        }
+        if (fill < 0.5) fill = 0.5;
+        if (fill > 1.0) fill = 1.0;
+        const uint16_t LEAF_PACK = static_cast<uint16_t>(
+            std::max<uint16_t>(LEAF_SLOTMIN,
+                static_cast<uint16_t>(LEAF_SLOTMAX * fill)));
 
         // Leaf level: keep per-leaf DimStats in a parallel array so the first
         // inner level can merge them without walking any leaf keys again.

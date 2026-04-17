@@ -75,6 +75,7 @@ int main(int argc, char** argv) {
     cfg.enable_aggregates   = true;
     cfg.enable_buffer_pool  = false;
     cfg.single_threaded     = true;
+    cfg.workload_profile    = hptree::WorkloadProfile::ANALYTICAL;
 
     hptree::HPTree tree(cfg, schema);
     std::vector<bench::QueryResult> results;

@@ -56,6 +56,14 @@ enum class PredicateOp : uint8_t {
     EQ, NEQ, LT, LTE, GT, GTE, BETWEEN, IN, IS_NULL, IS_NOT_NULL, LIKE,
 };
 
+enum class WorkloadProfile : uint8_t {
+    ANALYTICAL   = 0,
+    SCAN_HEAVY   = 1,
+    WRITE_HEAVY  = 2,
+    BALANCED     = 3,
+    CUSTOM       = 4,
+};
+
 struct HPTreeConfig {
     size_t       branching_factor   = DEFAULT_BRANCHING_FACTOR;
     size_t       max_leaf_size      = DEFAULT_MAX_LEAF_SIZE;
@@ -71,6 +79,8 @@ struct HPTreeConfig {
     bool         enable_delta_buffer= false;
     bool         enable_aggregates  = true;
     bool         single_threaded    = true;
+    WorkloadProfile workload_profile  = WorkloadProfile::BALANCED;
+    double       bulk_load_fill_factor = -1.0;
     std::string  wal_path           = "hp_tree.wal";
     std::string  data_path          = "hp_tree.dat";
 };
