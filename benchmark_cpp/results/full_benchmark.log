@@ -1,0 +1,273 @@
+[bplus] loading dataset /Users/sutirthachakraborty/Downloads/HP-TREE/benchmark_cpp/datasets/uniform.bin...
+[bplus] N=1000000
+[bplus] Q1 bulk_load 118.273ms  size=1000000
+[bplus] Q2 point_lookup 1.10525ms  hits=2000
+[bplus] Q3 narrow_range 0.053083ms  n=16494
+[bplus] Q4 wide_range 2.47867ms  n=800035
+[bplus] Q5 dim_filter 5.12392ms  n=200268
+[bplus] Q6 multi_dim_filter 5.62321ms  n=13256
+[bplus] Q7 range_agg 2.20587ms  n=800035 sum=8.02355e+10
+[bplus] Q8 full_scan 1.30092ms  n=1000000
+[bplus] Q9 single_inserts 0.844583ms  n=1000
+[bplus] Q10 deletes 0.387583ms  removed=500
+[bplus] Q11 hypercube 10.1673ms  n=17536
+[bplus] Q12 group_by 7.99488ms  groups=15 sum=2.00904e+10
+[bplus] Q13 correlated 18.518ms  above=500509
+[bplus] Q14 moving_window 0.53575ms  total_n=183474
+[bplus] Q15 adhoc_drill 165.482ms  total_hits=400075
+[bplus] wrote /Users/sutirthachakraborty/Downloads/HP-TREE/benchmark_cpp/results/bplus_uniform.json
+[hp] loading dataset /Users/sutirthachakraborty/Downloads/HP-TREE/benchmark_cpp/datasets/uniform.bin...
+[hp] N=1000000
+[hp] Q1 bulk_load 193.234ms  size=1000000
+[hp] Q2 point_lookup 5.26904ms  hits=2000
+[hp] Q3 narrow_range 0.312917ms  n=16494
+[hp] Q4 wide_range 17.5788ms  n=800035
+[hp] Q5 dim_filter 7.05783ms  n=200268
+[hp] Q6 multi_dim_filter 6.71608ms  n=13256
+[hp] Q7 range_agg 13.2052ms  n=800035 sum=8.02355e+10
+[hp] Q8 full_scan 5.25721ms  n=1000000
+[hp] Q9 single_inserts 539.813ms  n=1000
+[hp] Q10 deletes 30.2636ms  removed=500
+[hp] Q11 hypercube 15.3966ms  n=17536
+[hp] Q12 group_by 8.2355ms  groups=15 sum=2.00904e+10
+[hp] Q13 correlated 26.238ms  above=500509
+[hp] Q14 moving_window 2.06933ms  total_n=183474
+[hp] Q15 adhoc_drill 198.71ms  total_hits=400075
+[hp] wrote /Users/sutirthachakraborty/Downloads/HP-TREE/benchmark_cpp/results/hp_uniform.json
+[bplus] loading dataset /Users/sutirthachakraborty/Downloads/HP-TREE/benchmark_cpp/datasets/clustered.bin...
+[bplus] N=1000000
+[bplus] Q1 bulk_load 114.755ms  size=1000000
+[bplus] Q2 point_lookup 0.954667ms  hits=0
+[bplus] Q3 narrow_range 0.087541ms  n=27647
+[bplus] Q4 wide_range 2.77062ms  n=888802
+[bplus] Q5 dim_filter 5.12996ms  n=332256
+[bplus] Q6 multi_dim_filter 5.92083ms  n=111167
+[bplus] Q7 range_agg 2.40117ms  n=888802 sum=4.29314e+10
+[bplus] Q8 full_scan 1.26671ms  n=1000000
+[bplus] Q9 single_inserts 0.757666ms  n=1000
+[bplus] Q10 deletes 0.160417ms  removed=0
+[bplus] Q11 hypercube 10.941ms  n=333615
+[bplus] Q12 group_by 9.27671ms  groups=15 sum=1.46251e+10
+[bplus] Q13 correlated 18.404ms  above=491124
+[bplus] Q14 moving_window 0.856583ms  total_n=304796
+[bplus] Q15 adhoc_drill 161.405ms  total_hits=334499
+[bplus] wrote /Users/sutirthachakraborty/Downloads/HP-TREE/benchmark_cpp/results/bplus_clustered.json
+[hp] loading dataset /Users/sutirthachakraborty/Downloads/HP-TREE/benchmark_cpp/datasets/clustered.bin...
+[hp] N=1000000
+[hp] Q1 bulk_load 181.303ms  size=1000000
+[hp] Q2 point_lookup 1.91458ms  hits=0
+[hp] Q3 narrow_range 0.448208ms  n=27647
+[hp] Q4 wide_range 12.0598ms  n=888802
+[hp] Q5 dim_filter 7.86408ms  n=332256
+[hp] Q6 multi_dim_filter 8.72504ms  n=111167
+[hp] Q7 range_agg 11.4499ms  n=888802 sum=4.29314e+10
+[hp] Q8 full_scan 5.22267ms  n=1000000
+[hp] Q9 single_inserts 493.876ms  n=1000
+[hp] Q10 deletes 2.01546ms  removed=500
+[hp] Q11 hypercube 19.3233ms  n=333615
+[hp] Q12 group_by 10.6215ms  groups=15 sum=1.46251e+10
+[hp] Q13 correlated 26.2985ms  above=491124
+[hp] Q14 moving_window 3.14354ms  total_n=304796
+[hp] Q15 adhoc_drill 199.871ms  total_hits=334499
+[hp] wrote /Users/sutirthachakraborty/Downloads/HP-TREE/benchmark_cpp/results/hp_clustered.json
+[bplus] loading dataset /Users/sutirthachakraborty/Downloads/HP-TREE/benchmark_cpp/datasets/skewed.bin...
+[bplus] N=1000000
+[bplus] Q1 bulk_load 115.322ms  size=1000000
+[bplus] Q2 point_lookup 0.812834ms  hits=0
+[bplus] Q3 narrow_range 0.011209ms  n=3280
+[bplus] Q4 wide_range 2.98338ms  n=959842
+[bplus] Q5 dim_filter 5.12713ms  n=839903
+[bplus] Q6 multi_dim_filter 8.17383ms  n=802627
+[bplus] Q7 range_agg 2.59804ms  n=959842 sum=1.12063e+11
+[bplus] Q8 full_scan 1.26513ms  n=1000000
+[bplus] Q9 single_inserts 0.618958ms  n=1000
+[bplus] Q10 deletes 0.120667ms  removed=0
+[bplus] Q11 hypercube 13.1081ms  n=803549
+[bplus] Q12 group_by 14.1866ms  groups=15 sum=1.00042e+11
+[bplus] Q13 correlated 18.3504ms  above=505233
+[bplus] Q14 moving_window 2.29108ms  total_n=836797
+[bplus] Q15 adhoc_drill 152.956ms  total_hits=80219
+[bplus] wrote /Users/sutirthachakraborty/Downloads/HP-TREE/benchmark_cpp/results/bplus_skewed.json
+[hp] loading dataset /Users/sutirthachakraborty/Downloads/HP-TREE/benchmark_cpp/datasets/skewed.bin...
+[hp] N=1000000
+[hp] Q1 bulk_load 184.519ms  size=1000000
+[hp] Q2 point_lookup 1.33187ms  hits=0
+[hp] Q3 narrow_range 0.038125ms  n=3280
+[hp] Q4 wide_range 13.9016ms  n=959842
+[hp] Q5 dim_filter 12.4853ms  n=839903
+[hp] Q6 multi_dim_filter 16.4262ms  n=802627
+[hp] Q7 range_agg 12.0715ms  n=959842 sum=1.12063e+11
+[hp] Q8 full_scan 5.25992ms  n=1000000
+[hp] Q9 single_inserts 204.553ms  n=1000
+[hp] Q10 deletes 2.079ms  removed=500
+[hp] Q11 hypercube 25.435ms  n=803549
+[hp] Q12 group_by 19.016ms  groups=15 sum=1.00042e+11
+[hp] Q13 correlated 26.4327ms  above=505233
+[hp] Q14 moving_window 10.234ms  total_n=836797
+[hp] Q15 adhoc_drill 165.727ms  total_hits=80219
+[hp] wrote /Users/sutirthachakraborty/Downloads/HP-TREE/benchmark_cpp/results/hp_skewed.json
+[bplus] loading dataset /Users/sutirthachakraborty/Downloads/HP-TREE/benchmark_cpp/datasets/sequential.bin...
+[bplus] N=1000000
+[bplus] Q1 bulk_load 63.0142ms  size=1000000
+[bplus] Q2 point_lookup 0.638542ms  hits=0
+[bplus] Q3 narrow_range 0.002625ms  n=364
+[bplus] Q4 wide_range 0.055209ms  n=17472
+[bplus] Q5 dim_filter 5.22462ms  n=4368
+[bplus] Q6 multi_dim_filter 4.79188ms  n=284
+[bplus] Q7 range_agg 0.049708ms  n=17472 sum=1.77087e+09
+[bplus] Q8 full_scan 1.268ms  n=1000000
+[bplus] Q9 single_inserts 0.432584ms  n=1000
+[bplus] Q10 deletes 0.087542ms  removed=0
+[bplus] Q11 hypercube 6.15733ms  n=368
+[bplus] Q12 group_by 6.06975ms  groups=15 sum=4.75204e+08
+[bplus] Q13 correlated 18.8408ms  above=500131
+[bplus] Q14 moving_window 0.032125ms  total_n=4194
+[bplus] Q15 adhoc_drill 143.388ms  total_hits=8807
+[bplus] wrote /Users/sutirthachakraborty/Downloads/HP-TREE/benchmark_cpp/results/bplus_sequential.json
+[hp] loading dataset /Users/sutirthachakraborty/Downloads/HP-TREE/benchmark_cpp/datasets/sequential.bin...
+[hp] N=1000000
+[hp] Q1 bulk_load 138.415ms  size=1000000
+[hp] Q2 point_lookup 0.699ms  hits=0
+[hp] Q3 narrow_range 0.018459ms  n=364
+[hp] Q4 wide_range 0.313833ms  n=17472
+[hp] Q5 dim_filter 10.1102ms  n=4368
+[hp] Q6 multi_dim_filter 8.90804ms  n=284
+[hp] Q7 range_agg 0.239833ms  n=17472 sum=1.77087e+09
+[hp] Q8 full_scan 5.3125ms  n=1000000
+[hp] Q9 single_inserts 24.7248ms  n=1000
+[hp] Q10 deletes 0.232125ms  removed=500
+[hp] Q11 hypercube 9.19492ms  n=368
+[hp] Q12 group_by 8.89558ms  groups=15 sum=4.75204e+08
+[hp] Q13 correlated 26.1945ms  above=500131
+[hp] Q14 moving_window 0.140416ms  total_n=4194
+[hp] Q15 adhoc_drill 265.331ms  total_hits=8807
+[hp] wrote /Users/sutirthachakraborty/Downloads/HP-TREE/benchmark_cpp/results/hp_sequential.json
+
+--- uniform ---
+  > bplus_runner uniform
+    (0.4s)
+  > hp_runner uniform
+    (1.2s)
+
+--- clustered ---
+  > bplus_runner clustered
+    (0.4s)
+  > hp_runner clustered
+    (1.1s)
+
+--- skewed ---
+  > bplus_runner skewed
+    (0.4s)
+  > hp_runner skewed
+    (0.8s)
+
+--- sequential ---
+  > bplus_runner sequential
+    (0.3s)
+  > hp_runner sequential
+    (0.6s)
+
+================================================================================================
+                           HP-Tree (C++) vs tlx::btree_multimap (C++)                           
+================================================================================================
+
+UNIFORM DISTRIBUTION
+  Query                     tlx::btree     HP-Tree       Speedup   Correct
+  ------------------------------------------------------------------------
+  Bulk Load                      118.3       193.2    B+    1.6x       YES
+  Point Lookup                    1.11        5.27    B+    4.8x       YES
+  Narrow Range                   0.053       0.313    B+    5.9x       YES
+  Wide Range                      2.48       17.58    B+    7.1x       YES
+  Dim Filter                      5.12        7.06    B+    1.4x       YES
+  Multi-Dim Filter                5.62        6.72    B+    1.2x       YES
+  Range Aggregation               2.21       13.21    B+    6.0x       YES
+  Full Scan                       1.30        5.26    B+    4.0x       YES
+  Single Inserts                 0.845       539.8    B+  639.1x       YES
+  Deletes                        0.388       30.26    B+   78.1x       YES
+  Hypercube 3-dim                10.17       15.40    B+    1.5x       YES
+  Group-By Agg                    7.99        8.24    B+    1.0x       YES
+  Correlated Sub                 18.52       26.24    B+    1.4x       YES
+  Moving Window                  0.536        2.07    B+    3.9x       YES
+  Ad-Hoc Drill                   165.5       198.7    B+    1.2x       YES
+
+CLUSTERED DISTRIBUTION
+  Query                     tlx::btree     HP-Tree       Speedup   Correct
+  ------------------------------------------------------------------------
+  Bulk Load                      114.8       181.3    B+    1.6x       YES
+  Point Lookup                   0.955        1.91    B+    2.0x       YES
+  Narrow Range                   0.088       0.448    B+    5.1x       YES
+  Wide Range                      2.77       12.06    B+    4.4x       YES
+  Dim Filter                      5.13        7.86    B+    1.5x       YES
+  Multi-Dim Filter                5.92        8.73    B+    1.5x       YES
+  Range Aggregation               2.40       11.45    B+    4.8x       YES
+  Full Scan                       1.27        5.22    B+    4.1x       YES
+  Single Inserts                 0.758       493.9    B+  651.8x       YES
+  Deletes                        0.160        2.02    B+   12.6x        NO
+  Hypercube 3-dim                10.94       19.32    B+    1.8x       YES
+  Group-By Agg                    9.28       10.62    B+    1.1x       YES
+  Correlated Sub                 18.40       26.30    B+    1.4x       YES
+  Moving Window                  0.857        3.14    B+    3.7x       YES
+  Ad-Hoc Drill                   161.4       199.9    B+    1.2x       YES
+
+SKEWED DISTRIBUTION
+  Query                     tlx::btree     HP-Tree       Speedup   Correct
+  ------------------------------------------------------------------------
+  Bulk Load                      115.3       184.5    B+    1.6x       YES
+  Point Lookup                   0.813        1.33    B+    1.6x       YES
+  Narrow Range                   0.011       0.038    B+    3.4x       YES
+  Wide Range                      2.98       13.90    B+    4.7x       YES
+  Dim Filter                      5.13       12.49    B+    2.4x       YES
+  Multi-Dim Filter                8.17       16.43    B+    2.0x       YES
+  Range Aggregation               2.60       12.07    B+    4.6x       YES
+  Full Scan                       1.27        5.26    B+    4.2x       YES
+  Single Inserts                 0.619       204.6    B+  330.5x       YES
+  Deletes                        0.121        2.08    B+   17.2x        NO
+  Hypercube 3-dim                13.11       25.43    B+    1.9x       YES
+  Group-By Agg                   14.19       19.02    B+    1.3x       YES
+  Correlated Sub                 18.35       26.43    B+    1.4x       YES
+  Moving Window                   2.29       10.23    B+    4.5x       YES
+  Ad-Hoc Drill                   153.0       165.7    B+    1.1x       YES
+
+SEQUENTIAL DISTRIBUTION
+  Query                     tlx::btree     HP-Tree       Speedup   Correct
+  ------------------------------------------------------------------------
+  Bulk Load                      63.01       138.4    B+    2.2x       YES
+  Point Lookup                   0.639       0.699    B+    1.1x       YES
+  Narrow Range                   0.003       0.018    B+    7.0x       YES
+  Wide Range                     0.055       0.314    B+    5.7x       YES
+  Dim Filter                      5.22       10.11    B+    1.9x       YES
+  Multi-Dim Filter                4.79        8.91    B+    1.9x       YES
+  Range Aggregation              0.050       0.240    B+    4.8x       YES
+  Full Scan                       1.27        5.31    B+    4.2x       YES
+  Single Inserts                 0.433       24.72    B+   57.2x       YES
+  Deletes                        0.088       0.232    B+    2.7x        NO
+  Hypercube 3-dim                 6.16        9.19    B+    1.5x       YES
+  Group-By Agg                    6.07        8.90    B+    1.5x       YES
+  Correlated Sub                 18.84       26.19    B+    1.4x       YES
+  Moving Window                  0.032       0.140    B+    4.4x       YES
+  Ad-Hoc Drill                   143.4       265.3    B+    1.9x       YES
+
+================================================================================================
+                                   CROSS-DISTRIBUTION SUMMARY                                   
+================================================================================================
+  Query                          uniform     clustered        skewed    sequential
+  --------------------------------------------------------------------------------
+  Bulk Load                    B+   1.6x     B+   1.6x     B+   1.6x     B+   2.2x
+  Point Lookup                 B+   4.8x     B+   2.0x     B+   1.6x     B+   1.1x
+  Narrow Range                 B+   5.9x     B+   5.1x     B+   3.4x     B+   7.0x
+  Wide Range                   B+   7.1x     B+   4.4x     B+   4.7x     B+   5.7x
+  Dim Filter                   B+   1.4x     B+   1.5x     B+   2.4x     B+   1.9x
+  Multi-Dim Filter             B+   1.2x     B+   1.5x     B+   2.0x     B+   1.9x
+  Range Aggregation            B+   6.0x     B+   4.8x     B+   4.6x     B+   4.8x
+  Full Scan                    B+   4.0x     B+   4.1x     B+   4.2x     B+   4.2x
+  Single Inserts               B+ 639.1x     B+ 651.8x     B+ 330.5x     B+  57.2x
+  Deletes                      B+  78.1x     B+  12.6x     B+  17.2x     B+   2.7x
+  Hypercube 3-dim              B+   1.5x     B+   1.8x     B+   1.9x     B+   1.5x
+  Group-By Agg                 B+   1.0x     B+   1.1x     B+   1.3x     B+   1.5x
+  Correlated Sub               B+   1.4x     B+   1.4x     B+   1.4x     B+   1.4x
+  Moving Window                B+   3.9x     B+   3.7x     B+   4.5x     B+   4.4x
+  Ad-Hoc Drill                 B+   1.2x     B+   1.2x     B+   1.1x     B+   1.9x
+
+  Wins:         HP-Tree=  0   tlx::btree= 60   of 60
+  Correctness:  57/60 cells matched
+

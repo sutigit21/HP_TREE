@@ -1,0 +1,206 @@
+{
+  "dataset": "uniform",
+  "queries": [
+    {
+      "checksum": 0,
+      "count": 10000000,
+      "elapsed_ms": 1535.294375,
+      "extra": "",
+      "name": "Q1_bulk_load",
+      "sum": 0.0
+    },
+    {
+      "checksum": 4023670319387879,
+      "count": 2000,
+      "elapsed_ms": 1.489834,
+      "extra": "",
+      "name": "Q2_point_lookup",
+      "sum": 0.0
+    },
+    {
+      "checksum": 6305944225456537,
+      "count": 167193,
+      "elapsed_ms": 0.434959,
+      "extra": "",
+      "name": "Q3_narrow_range",
+      "sum": 16739818330.0
+    },
+    {
+      "checksum": 222342510165228,
+      "count": 8000502,
+      "elapsed_ms": 22.833291,
+      "extra": "",
+      "name": "Q4_wide_range",
+      "sum": 802103716095.0
+    },
+    {
+      "checksum": 107965894400069,
+      "count": 2000198,
+      "elapsed_ms": 3.64875,
+      "extra": "",
+      "name": "Q5_dim_filter",
+      "sum": 0.0
+    },
+    {
+      "checksum": 6327161750107594,
+      "count": 133347,
+      "elapsed_ms": 7.274291,
+      "extra": "",
+      "name": "Q6_multi_dim_filter",
+      "sum": 0.0
+    },
+    {
+      "checksum": 0,
+      "count": 8000502,
+      "elapsed_ms": 0.003084,
+      "extra": "",
+      "name": "Q7_range_agg",
+      "sum": 802103716095.0
+    },
+    {
+      "checksum": 38572638901259,
+      "count": 10000000,
+      "elapsed_ms": 17.817208,
+      "extra": "",
+      "name": "Q8_full_scan",
+      "sum": 0.0
+    },
+    {
+      "checksum": 0,
+      "count": 1000,
+      "elapsed_ms": 0.701625,
+      "extra": "",
+      "name": "Q9_single_inserts",
+      "sum": 0.0
+    },
+    {
+      "checksum": 0,
+      "count": 500,
+      "elapsed_ms": 0.283417,
+      "extra": "",
+      "name": "Q10_deletes",
+      "sum": 0.0
+    },
+    {
+      "checksum": 534414348480223,
+      "count": 177506,
+      "elapsed_ms": 64.18225,
+      "extra": "",
+      "name": "Q11_hypercube",
+      "sum": 0.0
+    },
+    {
+      "checksum": 12159627333647300079,
+      "count": 2000313,
+      "elapsed_ms": 14.738291,
+      "extra": "15 groups",
+      "name": "Q12_group_by",
+      "sum": 200492028006.0
+    },
+    {
+      "checksum": 0,
+      "count": 5000206,
+      "elapsed_ms": 108.095208,
+      "extra": "9 groups",
+      "name": "Q13_correlated",
+      "sum": 0.0
+    },
+    {
+      "checksum": 16508145822,
+      "count": 1833318,
+      "elapsed_ms": 0.078708,
+      "extra": "",
+      "name": "Q14_moving_window",
+      "sum": 183723206622.0
+    },
+    {
+      "checksum": 6394473762075315,
+      "count": 3998959,
+      "elapsed_ms": 276.528708,
+      "extra": "30 drills",
+      "name": "Q15_adhoc_drill",
+      "sum": 0.0
+    },
+    {
+      "checksum": 8047569101133569763,
+      "count": 5,
+      "elapsed_ms": 12.7325,
+      "extra": "9 groups",
+      "name": "Q16_topk_groups",
+      "sum": 111523759180.0
+    },
+    {
+      "checksum": 12159627382373874364,
+      "count": 15,
+      "elapsed_ms": 61.605708,
+      "extra": "15 groups total",
+      "name": "Q17_having_clause",
+      "sum": 1002663097115.0
+    },
+    {
+      "checksum": 1083399234650301485,
+      "count": 8000890,
+      "elapsed_ms": 69.255416,
+      "extra": "48 ym / 4 yr",
+      "name": "Q18_ym_rollup",
+      "sum": 802187281987.0
+    },
+    {
+      "checksum": 0,
+      "count": 5000254,
+      "elapsed_ms": 132.844625,
+      "extra": "135 partitions",
+      "name": "Q19_corr_multi_dim",
+      "sum": 0.0
+    },
+    {
+      "checksum": 28766565753116425,
+      "count": 4,
+      "elapsed_ms": 24.69925,
+      "extra": "9a/9b",
+      "name": "Q20_yoy_semijoin",
+      "sum": 275565643.0
+    },
+    {
+      "checksum": 509886096906871,
+      "count": 490200,
+      "elapsed_ms": 30.779375,
+      "extra": "3 groups",
+      "name": "Q21_or_bitmap",
+      "sum": 49117196056.0
+    },
+    {
+      "checksum": 16652509501700348363,
+      "count": 1833318,
+      "elapsed_ms": 12.030917,
+      "extra": "12 months",
+      "name": "Q22_window_top3_month",
+      "sum": 37315739151.0
+    },
+    {
+      "checksum": 6454158590057802,
+      "count": 998403,
+      "elapsed_ms": 29.432542,
+      "extra": "135 partitions",
+      "name": "Q23_cte_correlated",
+      "sum": 149967146305.0
+    },
+    {
+      "checksum": 0,
+      "count": 0,
+      "elapsed_ms": 29.253167,
+      "extra": "135/135 partitions",
+      "name": "Q24_yoy_selfjoin",
+      "sum": 0.0
+    },
+    {
+      "checksum": 1113307255026047,
+      "count": 501390,
+      "elapsed_ms": 49.72325,
+      "extra": "4-dim box",
+      "name": "Q25_dense_hyperbox",
+      "sum": 52638767486.0
+    }
+  ],
+  "tree": "hp"
+}

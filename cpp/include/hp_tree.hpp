@@ -14,8 +14,16 @@
 namespace hptree {
 
 // =============================================================================
-//  HPTree: tlx-style B+-tree with per-node beta metadata and per-subtree
-//  DimStats aggregates for predicate-pruning & O(1) range aggregates.
+//  HPTree: tlx-style B+-tree with per-inner-node key-range bounds and
+//  per-subtree DimStats aggregates for predicate-pruning & O(1) range
+//  aggregates.
+//
+//  Storage-saving notes:
+//    - Leaves carry NO range_lo/range_hi — since keys[] is sorted, min is
+//      keys[0] and max is keys[slotuse-1].  Access via LeafNode::min_key() /
+//      max_key() or the polymorphic node_range_lo / node_range_hi helpers.
+//      This shrinks each leaf by 32 bytes (two __uint128_t) and, for a
+//      1M-record tree with ~32k leaves, saves ~1 MB of hot cache footprint.
 //
 //  Incremental invariants:
 //    - On insert/remove, parent dim_stats.count and dim_stats.sum are kept
@@ -72,16 +80,13 @@ public:
         //     delivering ~17% fewer leaves than the old 75% packing.
         static constexpr uint16_t LEAF_PACK = (LEAF_SLOTMAX * 27) / 32;
 
-        // Preallocate exact capacities — no vector reallocations on the hot
-        // build path.  level_nodes/level_stats/level_counts are all parallel
-        // arrays of the same length.
+        // Leaf level: keep per-leaf DimStats in a parallel array so the first
+        // inner level can merge them without walking any leaf keys again.
         const size_t n_leaves = (recs.size() + LEAF_PACK - 1) / LEAF_PACK;
         std::vector<NodeBase*>                      level_nodes;
-        std::vector<std::array<DimStats, MAX_DIMS>> level_stats;
-        std::vector<uint64_t>                       level_counts;
+        std::vector<std::array<DimStats, MAX_DIMS>> leaf_stats;
         level_nodes.reserve(n_leaves);
-        level_stats.reserve(n_leaves);
-        level_counts.reserve(n_leaves);
+        leaf_stats.reserve(n_leaves);
 
         LeafNode* prev = nullptr;
         size_t i = 0;
@@ -90,10 +95,8 @@ public:
             LeafNode* leaf = new LeafNode();
             leaf->init();
             leaf->slotuse = static_cast<uint16_t>(chunk);
-            // Emplace a default-constructed stats slot and fill it in place —
-            // avoids the temporary std::array copy.
-            level_stats.emplace_back();
-            auto& ls = level_stats.back();
+            leaf_stats.emplace_back();
+            auto& ls = leaf_stats.back();
             for (size_t j = 0; j < chunk; ++j) {
                 CompositeKey k = recs[i + j].key;
                 leaf->keys[j]   = k;
@@ -101,74 +104,29 @@ public:
                 for (size_t d = 0; d < dim_count_; ++d)
                     ls[d].add(extract_dim_fast(k, d));
             }
-            leaf->range_lo = leaf->keys[0];
-            leaf->range_hi = leaf->keys[chunk - 1];
             leaf->prev_leaf = prev;
             if (prev) prev->next_leaf = leaf;
             else      head_leaf_ = leaf;
             prev = leaf;
             level_nodes.push_back(leaf);
-            level_counts.push_back(static_cast<uint64_t>(chunk));
             i += chunk;
         }
         tail_leaf_ = prev;
         total_records_ = recs.size();
         levels_ = 1;
 
-        // Build inner levels bottom-up.  At each level, aggregate DimStats
-        // directly into the new inner node's dim_stats array — no temporary
-        // aggregate buffer and no final copy-out.
-        while (level_nodes.size() > 1) {
-            const size_t n_parents = (level_nodes.size() + INNER_SLOTMAX)
-                                     / (INNER_SLOTMAX + 1);
-            std::vector<NodeBase*>                      parents;
-            std::vector<std::array<DimStats, MAX_DIMS>> parent_stats;
-            std::vector<uint64_t>                       parent_counts;
-            parents.reserve(n_parents);
-            parent_stats.reserve(n_parents);
-            parent_counts.reserve(n_parents);
-
-            size_t k = 0;
-            while (k < level_nodes.size()) {
-                size_t chunk = std::min<size_t>(INNER_SLOTMAX + 1,
-                                                level_nodes.size() - k);
-                InnerNode* inner = new InnerNode();
-                inner->init(static_cast<uint16_t>(levels_), dim_count_);
-                inner->slotuse = static_cast<uint16_t>(chunk - 1);
-
-                CompositeKey lo = COMPOSITE_KEY_MAX;
-                CompositeKey hi = COMPOSITE_KEY_MIN;
-                uint64_t count = 0;
-
-                for (size_t j = 0; j < chunk; ++j) {
-                    NodeBase* c = level_nodes[k + j];
-                    inner->childid[j] = c;
-                    if (c->range_lo < lo) lo = c->range_lo;
-                    if (c->range_hi > hi) hi = c->range_hi;
-                    count += level_counts[k + j];
-                    for (size_t d = 0; d < dim_count_; ++d)
-                        inner->dim_stats[d].merge(level_stats[k + j][d]);
-                }
-                for (size_t j = 0; j + 1 < chunk; ++j)
-                    inner->slotkey[j] = level_nodes[k + j]->range_hi;
-
-                inner->range_lo      = lo;
-                inner->range_hi      = hi;
-                inner->subtree_count = count;
-
-                // Emplace + fill parent_stats in place (no array copy).
-                parent_stats.emplace_back();
-                auto& ps = parent_stats.back();
-                for (size_t d = 0; d < dim_count_; ++d) ps[d] = inner->dim_stats[d];
-
-                parents.push_back(inner);
-                parent_counts.push_back(count);
-                k += chunk;
-            }
-            level_nodes  = std::move(parents);
-            level_stats  = std::move(parent_stats);
-            level_counts = std::move(parent_counts);
+        // Build the first inner level: merges leaf_stats[] directly and
+        // discards that array once done.  Subsequent inner levels read their
+        // children's dim_stats in place (no temporary buffer at all).
+        if (level_nodes.size() > 1) {
+            build_inner_level_from_leaves(level_nodes, leaf_stats);
+            leaf_stats.clear();
+            leaf_stats.shrink_to_fit();
             levels_++;
+            while (level_nodes.size() > 1) {
+                build_inner_level_from_inners(level_nodes);
+                levels_++;
+            }
         }
         root_ = level_nodes[0];
     }
@@ -288,7 +246,6 @@ public:
             leaf->keys[0]   = rec.key;
             leaf->values[0] = rec.value;
             leaf->slotuse   = 1;
-            leaf->recompute_range();
             root_ = head_leaf_ = tail_leaf_ = leaf;
             total_records_ = 1;
             levels_ = 1;
@@ -299,6 +256,42 @@ public:
         uint64_t key_dims[MAX_DIMS];
         for (size_t d = 0; d < dim_count_; ++d)
             key_dims[d] = extract_dim_fast(rec.key, d);
+
+        // -------------------------------------------------------------------
+        //  Sequential-append fast path.
+        //  If the new key is >= every key already in the tree AND the tail
+        //  leaf has room, we can skip the full root-to-leaf descent (its
+        //  inner_find_lower comparisons) and append directly at tail_leaf_.
+        //  The rightmost spine's metadata is still updated incrementally —
+        //  this preserves all DimStats invariants exactly.  Safe because:
+        //    * rec.key >= tail->max_key() implies the correct slot is
+        //      tail->slotuse (strict append), same as a full descent would
+        //      find.
+        //    * Every inner node along the rightmost spine covers tail_leaf_
+        //      and only it, so its range_hi is precisely tail->max_key()
+        //      before the append — bumping it to rec.key is correct.
+        // -------------------------------------------------------------------
+        if (tail_leaf_ != nullptr
+            && tail_leaf_->slotuse > 0
+            && tail_leaf_->slotuse < LEAF_SLOTMAX
+            && rec.key >= tail_leaf_->max_key())
+        {
+            LeafNode* lf = tail_leaf_;
+            uint16_t s = lf->slotuse;
+            lf->keys[s]   = rec.key;
+            lf->values[s] = rec.value;
+            lf->slotuse++;
+            // Walk rightmost spine, updating metadata.  The rightmost spine
+            // is uniquely defined: at each inner node, take childid[slotuse].
+            NodeBase* n = root_;
+            while (n->level > 0) {
+                auto* in = static_cast<InnerNode*>(n);
+                inner_meta_add(in, rec.key, key_dims);
+                n = in->childid[in->slotuse];
+            }
+            total_records_++;
+            return true;
+        }
 
         CompositeKey split_key = 0;
         NodeBase*    split_right = nullptr;
@@ -378,8 +371,100 @@ private:
     }
 
     // -------------------------------------------------------------------------
-    //  Full rebuild of inner metadata from children (used only on bulk_load
-    //  completion, new root creation, and split).
+    //  Bulk-load helpers: build one inner level by grouping the current
+    //  level_nodes vector in place.  The _from_leaves variant merges a
+    //  parallel leaf_stats[] array; _from_inners reads dim_stats straight
+    //  from each child InnerNode (no intermediate array needed).
+    // -------------------------------------------------------------------------
+    void build_inner_level_from_leaves(
+            std::vector<NodeBase*>& level_nodes,
+            const std::vector<std::array<DimStats, MAX_DIMS>>& leaf_stats)
+    {
+        const size_t n_parents = (level_nodes.size() + INNER_SLOTMAX)
+                                 / (INNER_SLOTMAX + 1);
+        std::vector<NodeBase*> parents;
+        parents.reserve(n_parents);
+
+        size_t k = 0;
+        while (k < level_nodes.size()) {
+            size_t chunk = std::min<size_t>(INNER_SLOTMAX + 1,
+                                            level_nodes.size() - k);
+            InnerNode* inner = new InnerNode();
+            inner->init(static_cast<uint16_t>(levels_), dim_count_);
+            inner->slotuse = static_cast<uint16_t>(chunk - 1);
+
+            CompositeKey lo = COMPOSITE_KEY_MAX;
+            CompositeKey hi = COMPOSITE_KEY_MIN;
+            uint64_t count = 0;
+
+            for (size_t j = 0; j < chunk; ++j) {
+                NodeBase* c = level_nodes[k + j];
+                inner->childid[j] = c;
+                // Child is a leaf here; slotkeys are leaf max_key()s.
+                auto* lf = static_cast<LeafNode*>(c);
+                CompositeKey cmin = lf->min_key();
+                CompositeKey cmax = lf->max_key();
+                if (cmin < lo) lo = cmin;
+                if (cmax > hi) hi = cmax;
+                if (j + 1 < chunk) inner->slotkey[j] = cmax;
+                count += lf->slotuse;
+                for (size_t d = 0; d < dim_count_; ++d)
+                    inner->dim_stats[d].merge(leaf_stats[k + j][d]);
+            }
+
+            inner->range_lo      = lo;
+            inner->range_hi      = hi;
+            inner->subtree_count = count;
+
+            parents.push_back(inner);
+            k += chunk;
+        }
+        level_nodes = std::move(parents);
+    }
+
+    void build_inner_level_from_inners(std::vector<NodeBase*>& level_nodes) {
+        const size_t n_parents = (level_nodes.size() + INNER_SLOTMAX)
+                                 / (INNER_SLOTMAX + 1);
+        std::vector<NodeBase*> parents;
+        parents.reserve(n_parents);
+
+        size_t k = 0;
+        while (k < level_nodes.size()) {
+            size_t chunk = std::min<size_t>(INNER_SLOTMAX + 1,
+                                            level_nodes.size() - k);
+            InnerNode* inner = new InnerNode();
+            inner->init(static_cast<uint16_t>(levels_), dim_count_);
+            inner->slotuse = static_cast<uint16_t>(chunk - 1);
+
+            CompositeKey lo = COMPOSITE_KEY_MAX;
+            CompositeKey hi = COMPOSITE_KEY_MIN;
+            uint64_t count = 0;
+
+            for (size_t j = 0; j < chunk; ++j) {
+                NodeBase* c = level_nodes[k + j];
+                inner->childid[j] = c;
+                auto* ic = static_cast<InnerNode*>(c);
+                if (ic->range_lo < lo) lo = ic->range_lo;
+                if (ic->range_hi > hi) hi = ic->range_hi;
+                if (j + 1 < chunk) inner->slotkey[j] = ic->range_hi;
+                count += ic->subtree_count;
+                for (size_t d = 0; d < dim_count_; ++d)
+                    inner->dim_stats[d].merge(ic->dim_stats[d]);
+            }
+
+            inner->range_lo      = lo;
+            inner->range_hi      = hi;
+            inner->subtree_count = count;
+
+            parents.push_back(inner);
+            k += chunk;
+        }
+        level_nodes = std::move(parents);
+    }
+
+    // -------------------------------------------------------------------------
+    //  Full rebuild of inner metadata from children (used only on new-root
+    //  creation and on split recomputation).
     // -------------------------------------------------------------------------
     void rebuild_inner_meta_from_children(InnerNode* in) {
         CompositeKey lo = COMPOSITE_KEY_MAX;
@@ -390,10 +475,13 @@ private:
         uint16_t nchildren = in->slotuse + 1;
         for (uint16_t i = 0; i < nchildren; ++i) {
             NodeBase* c = in->childid[i];
-            if (c->range_lo < lo) lo = c->range_lo;
-            if (c->range_hi > hi) hi = c->range_hi;
             if (c->level == 0) {
                 auto* lf = static_cast<LeafNode*>(c);
+                if (lf->slotuse == 0) continue;
+                CompositeKey cmin = lf->min_key();
+                CompositeKey cmax = lf->max_key();
+                if (cmin < lo) lo = cmin;
+                if (cmax > hi) hi = cmax;
                 cnt += lf->slotuse;
                 for (uint16_t s = 0; s < lf->slotuse; ++s) {
                     for (size_t d = 0; d < dim_count_; ++d)
@@ -401,6 +489,8 @@ private:
                 }
             } else {
                 auto* ic = static_cast<InnerNode*>(c);
+                if (ic->range_lo < lo) lo = ic->range_lo;
+                if (ic->range_hi > hi) hi = ic->range_hi;
                 cnt += ic->subtree_count;
                 for (size_t d = 0; d < dim_count_; ++d)
                     in->dim_stats[d].merge(ic->dim_stats[d]);
@@ -503,6 +593,31 @@ private:
         }
     }
 
+    // Emit records in a subtree applying the full PredicateSet + KeyRange
+    // filter to each record directly.  No DimStats are consulted below this
+    // call, so it costs exactly what a plain tlx-style linear scan of the
+    // same leaf range would cost.  Used by the adaptive-fallback path when
+    // DimStats would yield no pruning for this predicate on this subtree.
+    template <class F>
+    void emit_subtree_filtered(NodeBase* n, const PredicateSet& ps,
+                               const KeyRange& kr, F& cb) const {
+        LeafNode* start = leftmost_leaf(n);
+        LeafNode* end   = rightmost_leaf(n);
+        if (!start) return;
+        LeafNode* lf = start;
+        while (true) {
+            for (uint16_t s = 0; s < lf->slotuse; ++s) {
+                CompositeKey k = lf->keys[s];
+                if (k < kr.low || k > kr.high) continue;
+                if (ps.evaluate(k, schema_))
+                    cb(k, lf->values[s]);
+            }
+            if (lf == end) break;
+            lf = lf->next_leaf;
+            if (!lf) break;
+        }
+    }
+
     LeafNode* leftmost_leaf(NodeBase* n) const {
         while (n && n->level > 0)
             n = static_cast<InnerNode*>(n)->childid[0];
@@ -516,21 +631,71 @@ private:
         return static_cast<LeafNode*>(n);
     }
 
+    // Adaptive pruning-viability probe.
+    //
+    // For the given inner node, inspect the first K=min(slotuse+1, 8) children
+    // and count how many can be fully excluded (!subtree_may_contain) or
+    // fully emitted (subtree_fully_satisfies).  If zero of the probed
+    // children are prunable, DimStats-based descent will never prune anything
+    // in *this subtree* for *this predicate* — the caller is then free to
+    // switch to a pure leaf-chain walk with per-record filtering, paying
+    // exactly the cost of a tlx-equivalent linear scan.
+    //
+    // Monotonicity argument: child dim_stats are contained in parent stats,
+    // so parent's may_contain / fully_satisfies never return a "useful"
+    // verdict when the child's stats don't already.  Probing the first 8
+    // children is therefore a sound (if conservative) oracle — worst case
+    // we miss a few prune opportunities deeper.  We only take the fallback
+    // when *none* of the probed children show any usefulness.
+    //
+    // Cost of the probe itself: <= 8 * dim_count * predicates compares,
+    // which for MAX_DIMS=8 and typical predicate_count<=4 is ~256 ops —
+    // negligible against any subtree of more than a few hundred records.
+    bool pruning_viable(const InnerNode* in, const PredicateSet& ps) const {
+        // Only meaningful if at least one predicate targets a dim with stats.
+        bool any_dim_pred = false;
+        for (auto& p : ps.predicates) {
+            if (p.dim_idx < dim_count_) { any_dim_pred = true; break; }
+        }
+        if (!any_dim_pred) return false;
+
+        uint16_t nchildren = in->slotuse + 1;
+        uint16_t probe = std::min<uint16_t>(nchildren, 8);
+
+        // Leaf-level inner (level == 1): we cannot cheaply re-evaluate
+        // subtree_may_contain on individual leaves (they don't carry
+        // dim_stats).  The pruning gate we actually get at this level is
+        // the key-range gate from leaf min/max — which is already applied in
+        // predicate_search_node_cb.  Return true so the caller takes the
+        // normal path (which itself falls through to per-key evaluate for
+        // leaves — same cost as the fallback).
+        if (in->level == 1) return true;
+
+        for (uint16_t i = 0; i < probe; ++i) {
+            auto* ic = static_cast<const InnerNode*>(in->childid[i]);
+            if (!subtree_may_contain(ic, ps))         return true;
+            if (subtree_fully_satisfies(ic, ps))      return true;
+        }
+        return false;
+    }
+
     // Callback-based predicate descent — zero heap allocation per match.
     //
-    // Two pruning gates:
-    //   1. range_lo/range_hi vs KeyRange  (cheap key-level box test)
-    //   2. per-dim stats vs each predicate (subtree_may_contain)
-    // And one fast-path:
-    //   3. If the subtree is fully inside kr AND every predicate is fully
-    //      covered by the subtree's dim_stats, emit every record without
-    //      running ps.evaluate() per key — huge win on dense matches.
+    // Pruning gates (applied in order):
+    //   1. Node-level key-range vs KeyRange  (cheap range-box test).
+    //   2. Per-dim stats vs each predicate   (subtree_may_contain).
+    //   3. Fully-contained fast-path         (subtree_fully_satisfies +
+    //                                          range fully inside kr).
+    //   4. Adaptive fallback                 (pruning_viable returns false
+    //                                          → switch to filtered walk).
     template <class F>
     void predicate_search_node_cb(NodeBase* n, const PredicateSet& ps,
                                   const KeyRange& kr, F& cb) const {
-        if (n->range_hi < kr.low || n->range_lo > kr.high) return;
         if (n->level == 0) {
             auto* lf = static_cast<LeafNode*>(n);
+            if (lf->slotuse == 0) return;
+            // Leaf-level key-range box test using the sorted extremes.
+            if (lf->max_key() < kr.low || lf->min_key() > kr.high) return;
             for (uint16_t s = 0; s < lf->slotuse; ++s) {
                 CompositeKey k = lf->keys[s];
                 if (k < kr.low || k > kr.high) continue;
@@ -540,10 +705,11 @@ private:
             return;
         }
         auto* in = static_cast<InnerNode*>(n);
+        if (in->range_hi < kr.low || in->range_lo > kr.high) return;
         if (!subtree_may_contain(in, ps)) return;
         // Fast-path: whole subtree is inside kr AND all predicates are fully
         // satisfied by stats.  Emit via flat leaf walk without evaluate().
-        if (n->range_lo >= kr.low && n->range_hi <= kr.high
+        if (in->range_lo >= kr.low && in->range_hi <= kr.high
             && subtree_fully_satisfies(in, ps)) {
             emit_subtree_all(n, cb);
             return;
@@ -556,6 +722,24 @@ private:
         while (first < in->slotuse && in->slotkey[first] < kr.low) ++first;
         uint16_t last = in->slotuse;
         while (last > 0 && in->slotkey[last - 1] > kr.high) --last;
+
+        // Adaptive fallback: if no sampled child shows any pruning
+        // usefulness under this predicate AND the key-range gate itself
+        // isn't trimming the child window, descending with DimStats checks
+        // at every level below is pure overhead.  Walk the leaf chain under
+        // this subtree with a per-record filter — identical cost to a tlx
+        // linear scan.
+        //
+        // We only trigger this when kr is also uninformative for this
+        // subtree (first==0 && last==slotuse), otherwise the normal path's
+        // slotkey-based window already prunes effectively on its own.
+        if (first == 0 && last == in->slotuse
+            && !pruning_viable(in, ps))
+        {
+            emit_subtree_filtered(n, ps, kr, cb);
+            return;
+        }
+
         for (uint16_t i = first; i <= last; ++i)
             predicate_search_node_cb(in->childid[i], ps, kr, cb);
     }
@@ -563,10 +747,10 @@ private:
     void aggregate_dim_node(NodeBase* n, size_t dim,
                             CompositeKey lo, CompositeKey hi,
                             AggregateResult& r) const {
-        if (n->range_hi < lo || n->range_lo > hi) return;
         if (n->level > 0) {
             auto* in = static_cast<InnerNode*>(n);
-            if (n->range_lo >= lo && n->range_hi <= hi) {
+            if (in->range_hi < lo || in->range_lo > hi) return;
+            if (in->range_lo >= lo && in->range_hi <= hi) {
                 r.count += in->subtree_count;
                 r.sum   += in->dim_stats[dim].sum;
                 return;
@@ -581,6 +765,8 @@ private:
             return;
         }
         auto* lf = static_cast<LeafNode*>(n);
+        if (lf->slotuse == 0) return;
+        if (lf->max_key() < lo || lf->min_key() > hi) return;
         for (uint16_t s = 0; s < lf->slotuse; ++s) {
             CompositeKey k = lf->keys[s];
             if (k < lo || k > hi) continue;
@@ -605,8 +791,6 @@ private:
             lf->keys[s]   = rec.key;
             lf->values[s] = rec.value;
             lf->slotuse++;
-            if (rec.key < lf->range_lo) lf->range_lo = rec.key;
-            if (rec.key > lf->range_hi) lf->range_hi = rec.key;
             if (lf->is_full()) split_leaf(lf, split_key, split_right);
             return true;
         }
@@ -658,8 +842,6 @@ private:
             right->values[i] = lf->values[mid + i];
         }
         lf->slotuse = mid;
-        lf->recompute_range();
-        right->recompute_range();
 
         right->next_leaf = lf->next_leaf;
         right->prev_leaf = lf;
@@ -707,16 +889,21 @@ private:
         uint16_t nchildren = in->slotuse + 1;
         for (uint16_t i = 0; i < nchildren; ++i) {
             NodeBase* c = in->childid[i];
-            if (c->range_lo < lo) lo = c->range_lo;
-            if (c->range_hi > hi) hi = c->range_hi;
             if (c->level == 0) {
                 auto* lf = static_cast<LeafNode*>(c);
+                if (lf->slotuse == 0) continue;
+                CompositeKey cmin = lf->min_key();
+                CompositeKey cmax = lf->max_key();
+                if (cmin < lo) lo = cmin;
+                if (cmax > hi) hi = cmax;
                 cnt += lf->slotuse;
                 for (uint16_t s = 0; s < lf->slotuse; ++s)
                     for (size_t d = 0; d < dim_count_; ++d)
                         in->dim_stats[d].add(extract_dim_fast(lf->keys[s], d));
             } else {
                 auto* ic = static_cast<InnerNode*>(c);
+                if (ic->range_lo < lo) lo = ic->range_lo;
+                if (ic->range_hi > hi) hi = ic->range_hi;
                 cnt += ic->subtree_count;
                 for (size_t d = 0; d < dim_count_; ++d)
                     in->dim_stats[d].merge(ic->dim_stats[d]);
@@ -747,7 +934,6 @@ private:
                 lf->values[i] = lf->values[i + 1];
             }
             lf->slotuse--;
-            lf->recompute_range();
             return true;
         }
         auto* in = static_cast<InnerNode*>(n);
@@ -788,8 +974,6 @@ private:
                     rs->values[i] = rs->values[i + 1];
                 }
                 rs->slotuse--;
-                lf->recompute_range();
-                rs->recompute_range();
                 in->slotkey[slot] = lf->keys[lf->slotuse - 1];
                 return;
             }
@@ -802,7 +986,6 @@ private:
             lf->next_leaf = rs->next_leaf;
             if (rs->next_leaf) rs->next_leaf->prev_leaf = lf;
             if (tail_leaf_ == rs) tail_leaf_ = lf;
-            lf->recompute_range();
             // Remove slotkey[slot] and childid[slot+1].
             for (uint16_t i = slot; i + 1 < in->slotuse; ++i)
                 in->slotkey[i] = in->slotkey[i + 1];
@@ -825,8 +1008,6 @@ private:
                 lf->values[0] = ls->values[ls->slotuse - 1];
                 lf->slotuse++;
                 ls->slotuse--;
-                lf->recompute_range();
-                ls->recompute_range();
                 in->slotkey[slot - 1] = ls->keys[ls->slotuse - 1];
                 return;
             }
@@ -839,7 +1020,6 @@ private:
             ls->next_leaf = lf->next_leaf;
             if (lf->next_leaf) lf->next_leaf->prev_leaf = ls;
             if (tail_leaf_ == lf) tail_leaf_ = ls;
-            ls->recompute_range();
             for (uint16_t i = slot - 1; i + 1 < in->slotuse; ++i)
                 in->slotkey[i] = in->slotkey[i + 1];
             for (uint16_t i = slot; i < in->slotuse; ++i)

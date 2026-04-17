@@ -24,13 +24,6 @@ struct NodeBase {
     uint16_t level;       // 0 => leaf, >0 => inner
     uint16_t slotuse;
 
-    // range_lo / range_hi drive all query-path pruning.  beta_value and
-    // is_homogeneous used to live here but were never read by any query —
-    // they were removed to shrink the node and eliminate compute_beta() calls
-    // on bulk_load / split / remove hot paths.
-    CompositeKey range_lo;
-    CompositeKey range_hi;
-
     bool is_leaf() const { return level == 0; }
 };
 
@@ -47,28 +40,25 @@ struct LeafNode : public NodeBase {
         slotuse = 0;
         prev_leaf = nullptr;
         next_leaf = nullptr;
-        range_lo = COMPOSITE_KEY_MAX;
-        range_hi = COMPOSITE_KEY_MIN;
     }
 
     bool is_full()      const { return slotuse >= LEAF_SLOTMAX; }
     bool is_few()       const { return slotuse <= LEAF_SLOTMIN; }
     bool is_underflow() const { return slotuse < LEAF_SLOTMIN; }
 
-    // Cheap range refresh from the sorted key array.  No beta/homogeneity
-    // computation — those fields were removed because no query reads them.
-    void recompute_range() {
-        if (slotuse == 0) {
-            range_lo = COMPOSITE_KEY_MAX;
-            range_hi = COMPOSITE_KEY_MIN;
-            return;
-        }
-        range_lo = keys[0];
-        range_hi = keys[slotuse - 1];
-    }
+    // Leaf keys are kept sorted, so min/max are the first/last slots.
+    // Callers must only invoke these when slotuse > 0.
+    CompositeKey min_key() const { return keys[0]; }
+    CompositeKey max_key() const { return keys[slotuse - 1]; }
 };
 
 struct InnerNode : public NodeBase {
+    // range_lo / range_hi drive inner-node pruning.  They are maintained
+    // explicitly only on inner nodes; for leaves min_key()/max_key() derive
+    // them from the sorted key array without any extra storage.
+    CompositeKey range_lo;
+    CompositeKey range_hi;
+
     // +1 slack for temporary overflow during insert-before-split.
     CompositeKey slotkey[INNER_SLOTMAX + 1];
     NodeBase*    childid[INNER_SLOTMAX + 2];
@@ -92,6 +82,22 @@ struct InnerNode : public NodeBase {
     bool is_few()       const { return slotuse <= INNER_SLOTMIN; }
     bool is_underflow() const { return slotuse < INNER_SLOTMIN; }
 };
+
+// Uniform accessors for a child node's key range — hides the
+// LeafNode-derived-from-keys vs InnerNode-stored distinction so callers can
+// work with NodeBase* directly.  Preconditions: leaves must be non-empty; the
+// caller is responsible for checking slotuse > 0 (true for every node that
+// lives in a valid B+-tree after bulk_load / split / rebalance).
+inline CompositeKey node_range_lo(const NodeBase* n) {
+    if (n->level == 0)
+        return static_cast<const LeafNode*>(n)->min_key();
+    return static_cast<const InnerNode*>(n)->range_lo;
+}
+inline CompositeKey node_range_hi(const NodeBase* n) {
+    if (n->level == 0)
+        return static_cast<const LeafNode*>(n)->max_key();
+    return static_cast<const InnerNode*>(n)->range_hi;
+}
 
 // Linear scan beats std::lower_bound on nodes <= 32 slots due to branch
 // prediction (this is exactly what tlx does).

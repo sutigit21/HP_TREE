@@ -1,0 +1,166 @@
+{
+  "dataset": "uniform",
+  "queries": [
+    {
+      "checksum": 0,
+      "count": 1000000,
+      "elapsed_ms": 116.9805,
+      "extra": "",
+      "name": "Q1_bulk_load",
+      "sum": 0.0
+    },
+    {
+      "checksum": 3469185358267644,
+      "count": 2000,
+      "elapsed_ms": 1.012084,
+      "extra": "",
+      "name": "Q2_point_lookup",
+      "sum": 0.0
+    },
+    {
+      "checksum": 16734485255543,
+      "count": 16494,
+      "elapsed_ms": 0.054625,
+      "extra": "",
+      "name": "Q3_narrow_range",
+      "sum": 1648072869.0
+    },
+    {
+      "checksum": 6009025090763106,
+      "count": 800035,
+      "elapsed_ms": 2.483166,
+      "extra": "",
+      "name": "Q4_wide_range",
+      "sum": 80235464456.0
+    },
+    {
+      "checksum": 128678518951121,
+      "count": 200268,
+      "elapsed_ms": 5.130417,
+      "extra": "",
+      "name": "Q5_dim_filter",
+      "sum": 0.0
+    },
+    {
+      "checksum": 162186053668213,
+      "count": 13256,
+      "elapsed_ms": 5.593083,
+      "extra": "",
+      "name": "Q6_multi_dim_filter",
+      "sum": 0.0
+    },
+    {
+      "checksum": 0,
+      "count": 800035,
+      "elapsed_ms": 2.164208,
+      "extra": "",
+      "name": "Q7_range_agg",
+      "sum": 80235464456.0
+    },
+    {
+      "checksum": 3694001190153512,
+      "count": 1000000,
+      "elapsed_ms": 1.273292,
+      "extra": "",
+      "name": "Q8_full_scan",
+      "sum": 0.0
+    },
+    {
+      "checksum": 0,
+      "count": 1000,
+      "elapsed_ms": 0.868792,
+      "extra": "",
+      "name": "Q9_single_inserts",
+      "sum": 0.0
+    },
+    {
+      "checksum": 0,
+      "count": 500,
+      "elapsed_ms": 0.36575,
+      "extra": "",
+      "name": "Q10_deletes",
+      "sum": 0.0
+    },
+    {
+      "checksum": 722980936595369,
+      "count": 17536,
+      "elapsed_ms": 10.423834,
+      "extra": "",
+      "name": "Q11_hypercube",
+      "sum": 0.0
+    },
+    {
+      "checksum": 12159627329749116427,
+      "count": 200357,
+      "elapsed_ms": 7.107875,
+      "extra": "15 groups",
+      "name": "Q12_group_by",
+      "sum": 20090417254.0
+    },
+    {
+      "checksum": 0,
+      "count": 500509,
+      "elapsed_ms": 16.943042,
+      "extra": "9 groups",
+      "name": "Q13_correlated",
+      "sum": 0.0
+    },
+    {
+      "checksum": 1741357288,
+      "count": 183474,
+      "elapsed_ms": 0.535542,
+      "extra": "",
+      "name": "Q14_moving_window",
+      "sum": 18394423778.0
+    },
+    {
+      "checksum": 7425676784380209,
+      "count": 400075,
+      "elapsed_ms": 172.293833,
+      "extra": "30 drills",
+      "name": "Q15_adhoc_drill",
+      "sum": 0.0
+    },
+    {
+      "checksum": 11691214671349465507,
+      "count": 5,
+      "elapsed_ms": 6.884958,
+      "extra": "9 groups",
+      "name": "Q16_topk_groups",
+      "sum": 11218116882.0
+    },
+    {
+      "checksum": 12159627322565119425,
+      "count": 15,
+      "elapsed_ms": 10.10975,
+      "extra": "15 groups total",
+      "name": "Q17_having_clause",
+      "sum": 100370185826.0
+    },
+    {
+      "checksum": 1083399234334191258,
+      "count": 800445,
+      "elapsed_ms": 12.246292,
+      "extra": "48 ym / 4 yr",
+      "name": "Q18_ym_rollup",
+      "sum": 80320266210.0
+    },
+    {
+      "checksum": 0,
+      "count": 500420,
+      "elapsed_ms": 25.820792,
+      "extra": "135 partitions",
+      "name": "Q19_corr_multi_dim",
+      "sum": 0.0
+    },
+    {
+      "checksum": 6044507004757172748,
+      "count": 6,
+      "elapsed_ms": 8.552917,
+      "extra": "9a/9b",
+      "name": "Q20_yoy_semijoin",
+      "sum": 123627723.0
+    }
+  ],
+  "tree": "bplus"
+}

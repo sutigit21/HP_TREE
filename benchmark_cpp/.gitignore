@@ -4,6 +4,6 @@ build/
 # Generated binary datasets (regenerable via python/generate_datasets.py)
 datasets/*.bin
 
-# Benchmark result JSON / logs
-results/*.json
-results/*.log
+# Benchmark result JSON / logs — now tracked for reproducibility
+# results/*.json
+# results/*.log
