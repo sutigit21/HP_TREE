@@ -12,24 +12,24 @@ Benchmarked against `tlx::btree_multimap` v0.6.1 (a production-quality, cache-op
 
 | Metric | Result |
 |:---|:---|
-| **HP-Tree wins** | **69 / 100** query-distribution cells |
-| **Maximum HP-Tree speedup** | **4,132x** (Range Aggregation, Skewed) |
-| **Geometric mean speedup** | **3.16x** across all 100 cells |
-| **B+ Tree's best win** | 2.82x (Dense Hyperbox, Skewed) |
-| **B+ Tree's median win margin** | Just 1.16x |
+| **HP-Tree wins** | **66 / 100** query-distribution cells |
+| **Maximum HP-Tree speedup** | **4,716x** (Range Aggregation, Skewed) |
+| **Geometric mean speedup** | **3.00x** across all 100 cells |
+| **B+ Tree's best win** | 2.80x (Dense Hyperbox, Skewed) |
+| **B+ Tree's median win margin** | Just 1.19x |
 
 ### When HP-Tree Wins, It Wins Big
 
 | Query Type | Speedup Range | Why |
 |:---|:---|:---|
-| Range Aggregation (Q7) | **1,993--4,132x** | O(1) subtree shortcut vs O(N) scan |
-| Moving Window (Q14) | **41--234x** | Per-subtree DimStats pruning |
-| Dim Filter (Q5) | **1.2--275x** | Hierarchical DimStats exclusion |
-| Ad-Hoc Drill (Q15) | **2.3--69x** | Multi-level subtree pruning |
-| Group-By Agg (Q12) | **1.1--59x** | DimStats-accelerated grouped sums |
-| Point Lookup (Q2) | **2.1--2.6x** | Cache-efficient node layout |
-| Inserts (Q9) | **2.0--2.3x** | Sequential-append fast path |
-| Deletes (Q10) | **2.0--2.2x** | Lean leaf design |
+| Range Aggregation (Q7) | **170--4,716x** | O(1) subtree shortcut vs O(N) scan |
+| Moving Window (Q14) | **4--570x** | Per-subtree DimStats pruning (rolling 3-month) |
+| Dim Filter (Q5) | **1.1--284x** | Hierarchical DimStats exclusion |
+| Ad-Hoc Drill (Q15) | **2.3--70x** | Multi-level subtree pruning |
+| Group-By Agg (Q12) | **1.1--61x** | DimStats-accelerated grouped sums |
+| Point Lookup (Q2) | **1.8--2.5x** | Cache-efficient node layout |
+| Inserts (Q9) | **1.8--3.2x** | Sequential-append fast path |
+| Deletes (Q10) | **2.0--3.6x** | Lean leaf design |
 
 ### When B+ Tree Wins, the Margin Is Thin
 
@@ -37,11 +37,11 @@ Benchmarked against `tlx::btree_multimap` v0.6.1 (a production-quality, cache-op
 |:---|:---|:---|
 | Full Scan (Q8) | 1.6--1.9x | 43% more leaves due to 70% fill (tunable) |
 | Bulk Load (Q1) | 1.1--1.3x | One-time DimStats construction cost |
-| Narrow/Wide Range (Q3/Q4) | 1.2--1.4x | Tighter leaf packing |
+| Narrow/Wide Range (Q3/Q4) | 1.2--1.9x | Tighter leaf packing |
 | Hypercube/Hyperbox (Q11/Q25) | 1.5--2.8x | Bounding-box over-approximation on wide data |
-| Correlated Sub (Q13) | 1.01--1.05x | Arithmetic-bound (effective tie) |
+| Correlated Sub (Q13) | 1.05x | Arithmetic-bound (effective tie) |
 
-**In 24 of the 31 B+ wins, the margin is less than 1.4x.** The B+ Tree never exceeds 1.9x on structurally comparable queries.
+**In 23 of the 34 B+ wins, the margin is less than 1.4x.** The B+ Tree never exceeds 1.9x on structurally comparable queries.
 
 ---
 
@@ -58,7 +58,7 @@ Benchmarked against `tlx::btree_multimap` v0.6.1 (a production-quality, cache-op
 5. **Sequential-Append Fast Path** --- Bypasses O(log N) descent for monotonically increasing keys. 2x faster inserts on time-series data.
 
 6. **Workload-Adaptive Leaf Packing** --- Configurable fill factor via `WorkloadProfile`:
-   - `ANALYTICAL` → 70% fill (best overall: 69/100 wins)
+   - `ANALYTICAL` → 70% fill (best overall: 66/100 wins)
    - `SCAN_HEAVY` → 95% fill
    - `WRITE_HEAVY` → 70% fill
    - `BALANCED` → 84% fill

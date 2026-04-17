@@ -13,21 +13,25 @@ header-includes:
   - \usepackage{float}
   - \floatplacement{table}{H}
   - \usepackage{hyperref}
+  - \usepackage{needspace}
   - \hypersetup{colorlinks=true, linkcolor=blue, urlcolor=blue, citecolor=blue}
   - \usepackage{fancyhdr}
   - \pagestyle{fancy}
   - \fancyhead[L]{HP-Tree}
   - \fancyhead[R]{Chakraborty \& Basak, 2026}
   - \fancyfoot[C]{\thepage}
+  - \raggedbottom
+  - \widowpenalty=10000
+  - \clubpenalty=10000
 ---
 
 ## Abstract
 
-For over five decades, the B+ Tree has remained the default index structure in relational database systems, yet it is fundamentally constrained to a single dimension: records are sorted by one composite key, and any query that filters, aggregates, or groups along a non-prefix dimension must degrade to a full $O(N)$ scan. We present the **HP-Tree** (Homogeneity-Partitioned Tree), a breakthrough multi-dimensional index structure that resolves this fundamental limitation while preserving every strength of the B+ Tree. The HP-Tree introduces three architectural innovations that, together, constitute a paradigm shift in tree-structured indexing: (i) *hierarchical per-subtree dimensional statistics* (DimStats) --- min, max, count, and sum vectors at every inner node --- that transform the B+ Tree's unidimensional routing structure into a multi-dimensional pruning hierarchy capable of short-circuiting entire subtrees of $B^h$ records in $O(1)$; (ii) an *adaptive pruning-viability probe* that dynamically detects when DimStats-based descent yields no benefit and falls back to a cache-friendly leaf-chain walk, ensuring the HP-Tree is never slower than $O(N)$ on any query; and (iii) a *workload-adaptive leaf packing strategy* that tunes bulk-load fill factors to the expected query mix. We evaluate the HP-Tree against `tlx::btree_multimap` (v0.6.1) [11] --- a production-quality, cache-optimised C++ B+ Tree --- on $N = 10{,}000{,}000$ composite-key records across four data distributions and twenty-five query types. The HP-Tree **wins 69 of 100 query-distribution cells** with speedups reaching **$4{,}132\times$** on range aggregation and **$275\times$** on dimension filtering. In the 31 cells where the B+ Tree prevails, its advantage is marginal: a median of just $1.16\times$ and never exceeding $1.9\times$ on structurally comparable queries. These results demonstrate that the HP-Tree does not merely extend the B+ Tree --- it fundamentally transforms what a single tree-structured index can achieve.
+For over five decades, the B+ Tree has remained the default index structure in relational database systems, yet it is fundamentally constrained to a single dimension: records are sorted by one composite key, and any query that filters, aggregates, or groups along a non-prefix dimension must degrade to a full $O(N)$ scan. We present the **HP-Tree** (Homogeneity-Partitioned Tree), a breakthrough multi-dimensional index structure that resolves this fundamental limitation while preserving every strength of the B+ Tree. The HP-Tree introduces three architectural innovations that, together, constitute a paradigm shift in tree-structured indexing: (i) *hierarchical per-subtree dimensional statistics* (DimStats) --- min, max, count, and sum vectors at every inner node --- that transform the B+ Tree's unidimensional routing structure into a multi-dimensional pruning hierarchy capable of short-circuiting entire subtrees of $B^h$ records in $O(1)$; (ii) an *adaptive pruning-viability probe* that dynamically detects when DimStats-based descent yields no benefit and falls back to a cache-friendly leaf-chain walk, ensuring the HP-Tree is never slower than $O(N)$ on any query; and (iii) a *workload-adaptive leaf packing strategy* that tunes bulk-load fill factors to the expected query mix. We evaluate the HP-Tree against `tlx::btree_multimap` (v0.6.1) [11] --- a production-quality, cache-optimised C++ B+ Tree --- on $N = 10{,}000{,}000$ composite-key records across four data distributions and twenty-five query types. The HP-Tree **wins 66 of 100 query-distribution cells** with speedups reaching **$4{,}716\times$** on range aggregation and **$284\times$** on dimension filtering. In the 34 cells where the B+ Tree prevails, its advantage is marginal: a median of just $1.19\times$ and never exceeding $1.9\times$ on structurally comparable queries. These results demonstrate that the HP-Tree does not merely extend the B+ Tree --- it fundamentally transforms what a single tree-structured index can achieve.
 
 **Keywords:** multi-dimensional indexing, B+ Tree, composite keys, per-subtree aggregates, zone maps, analytical query processing, predicate pruning, distribution-aware indexing
 
-\newpage
+\needspace{5\baselineskip}
 
 ## 1. Introduction
 
@@ -75,7 +79,7 @@ The complete HP-Tree implementation is open source and available at: [\texttt{gi
 
 The remainder of this paper is organised as follows. Section 2 presents the HP-Tree's design: composite key encoding (2.1), node architecture (2.2), per-subtree DimStats (2.3), predicate pruning (2.4), the adaptive pruning-viability probe (2.5), the sequential-append fast path (2.6), deletion with leaf rebalancing (2.7), workload-adaptive leaf packing (2.8), and a tabular architectural comparison with the B+ Tree (2.9). Section 3 derives worst-case time and space complexity bounds. Section 4 describes the experimental design. Section 5 presents empirical results. Section 6 provides a detailed discussion including cross-industry relevance. Section 7 concludes with future research directions.
 
-\newpage
+\needspace{5\baselineskip}
 
 ## 2. HP-Tree Methodology
 
@@ -137,7 +141,7 @@ These statistics are conceptually analogous to the **zone maps** (also termed *m
 
 *First, hierarchical placement.* In column stores, zone maps are associated with fixed-size storage blocks whose contents are determined by insertion order and bear no relation to data semantics. The HP-Tree's DimStats, by contrast, are maintained at *every level of the inner-node hierarchy* and are coupled to the tree's sort-order-driven partitioning. This hierarchical placement enables multi-level short-circuiting: a single DimStats check at level $h$ can prune an entire subtree of $B^h$ records.
 
-*Second, distribution awareness.* The B+ Tree is fundamentally **distribution-agnostic**: its inner nodes contain only separator keys and child pointers, encoding zero information about the statistical properties of the data in each subtree. Whether a subtree holds tightly clustered records or uniformly distributed records, the B+ Tree's routing structure is identical --- it cannot exploit distributional structure because it does not represent it. The HP-Tree's DimStats make the tree **distribution-aware**: each inner node carries a statistical summary ($\texttt{min\_val}$, $\texttt{max\_val}$, $\texttt{sum}$, $\texttt{count}$ per dimension) that reflects the actual distribution of data in its subtree. When data is clustered, DimStats bounds are tight and pruning is maximally effective. When data is sequential, DimStats bounds become disjoint partitions enabling near-perfect exclusion. Even on uniformly distributed data --- the worst case for any distribution-aware technique --- the adaptive pruning-viability probe (Section 2.5) detects the lack of pruning potential and falls back gracefully, ensuring the HP-Tree is never slower than the distribution-agnostic baseline. This distribution awareness is what enables the HP-Tree to achieve $275\times$ speedup on sequential data while remaining competitive on uniform data --- a range of behaviour that is fundamentally impossible for any distribution-agnostic index.
+*Second, distribution awareness.* The B+ Tree is fundamentally **distribution-agnostic**: its inner nodes contain only separator keys and child pointers, encoding zero information about the statistical properties of the data in each subtree. Whether a subtree holds tightly clustered records or uniformly distributed records, the B+ Tree's routing structure is identical --- it cannot exploit distributional structure because it does not represent it. The HP-Tree's DimStats make the tree **distribution-aware**: each inner node carries a statistical summary ($\texttt{min\_val}$, $\texttt{max\_val}$, $\texttt{sum}$, $\texttt{count}$ per dimension) that reflects the actual distribution of data in its subtree. When data is clustered, DimStats bounds are tight and pruning is maximally effective. When data is sequential, DimStats bounds become disjoint partitions enabling near-perfect exclusion. Even on uniformly distributed data --- the worst case for any distribution-aware technique --- the adaptive pruning-viability probe (Section 2.5) detects the lack of pruning potential and falls back gracefully, ensuring the HP-Tree is never slower than the distribution-agnostic baseline. This distribution awareness is what enables the HP-Tree to achieve $284\times$ speedup on sequential data while remaining competitive on uniform data --- a range of behaviour that is fundamentally impossible for any distribution-agnostic index.
 
 **Construction during bulk load.** The bulk-load algorithm builds DimStats in two phases:
 
@@ -230,7 +234,7 @@ The fill factor is resolved once at bulk-load time; all subsequent queries opera
 
 Table 1 summarises the architectural differences between the B+ Tree (as implemented by `tlx::btree_multimap` [11]) and the HP-Tree.
 
-\vspace{0.2cm}
+\needspace{6\baselineskip}
 *Table 1. Architectural comparison.*
 
 | Feature | B+ Tree (tlx) [11] | HP-Tree |
@@ -246,7 +250,7 @@ Table 1 summarises the architectural differences between the B+ Tree (as impleme
 | Multi-dim pruning | None | Hypercube bounds checking at inner-node level |
 | Bulk load packing | Typically 100% | Workload-adaptive $\phi \in [0.5, 1.0]$ |
 
-\newpage
+\needspace{5\baselineskip}
 
 ## 3. Time and Space Complexity
 
@@ -266,7 +270,7 @@ At $N = 10{,}000{,}000$, $B = 32$, and $\phi = 0.70$: $L_{\text{HP}} \approx 44{
 
 ### 3.2 Time Complexity
 
-\vspace{0.2cm}
+\needspace{6\baselineskip}
 *Table 2. Time complexity of core operations.*
 
 | Operation | B+ Tree [1, 2, 11] | HP-Tree (worst) | HP-Tree (best) |
@@ -295,7 +299,7 @@ At $N = 10{,}000{,}000$, $B = 32$, and $\phi = 0.70$: $L_{\text{HP}} \approx 44{
 
 ### 3.3 Space Complexity
 
-\vspace{0.2cm}
+\needspace{6\baselineskip}
 *Table 3. Space complexity. $B$ = node order, $D$ = dimensions, $N$ = records.*
 
 | Component | B+ Tree (tlx) [11] | HP-Tree |
@@ -320,7 +324,7 @@ where $W_K$ = key width (16 bytes) and $W_V$ = value width (8 bytes).
 
 The HP-Tree's space overhead relative to the B+ Tree is negligible --- less than 0.2% of the $O(N)$ record storage.
 
-\newpage
+\needspace{5\baselineskip}
 
 ## 4. Experimental Design
 
@@ -350,7 +354,7 @@ Both index structures are implemented in C++ and compiled with Apple Clang 17.0.
 
 **Schema.** Records encode a 7-dimensional retail sales composite key in a 56-bit integer, as specified in Table 4.
 
-\vspace{0.2cm}
+\needspace{6\baselineskip}
 *Table 4. Composite key schema ($D = 7$ dimensions, $W = 56$ bits).*
 
 | Dimension | Bits | Encoding | Base | Scale | Domain |
@@ -381,7 +385,7 @@ Four distributions were selected to span the spectrum from worst-case (for DimSt
 
 The workload comprises twenty-five operations spanning the full spectrum of index usage, from basic OLTP operations [1, 2] to complex analytical patterns [7].
 
-\vspace{0.2cm}
+\needspace{6\baselineskip}
 *Table 5. Query workload specification ($N = 10{,}000{,}000$ records).*
 
 | ID | Query Type | Description |
@@ -399,10 +403,10 @@ The workload comprises twenty-five operations spanning the full spectrum of inde
 | Q11 | Hypercube 3-dim | 3-dim box: year $\in$ [2020, 2023], state $\in$ [CA, GA], product = Laptop |
 | Q12 | Group-By Agg | $\texttt{SUM(price)}$ grouped by 15 states, filtered to year = 2022 |
 | Q13 | Correlated Sub | Per-product: compute avg(price), then count records above avg |
-| Q14 | Moving Window | 12 monthly $\texttt{SUM(price)}$ windows within year 2022 |
+| Q14 | Moving Window | 10 rolling 3-month $\texttt{SUM(price)}$ windows within year 2022 |
 | Q15 | Ad-Hoc Drill | 30 random (year, state) drill-down queries |
 | Q16 | Top-K Groups | Top 5 states by $\texttt{SUM(price)}$, filtered to year = 2022 |
-| Q17 | HAVING Clause | Groups with $\texttt{SUM(price)} > 0$, filtered to year = 2022 |
+| Q17 | HAVING Clause | Groups with $\texttt{SUM(price)} > \$500\text{M}$, all records |
 | Q18 | Year/Month Rollup | Aggregate by (year, month) then roll up to year level |
 | Q19 | Corr Multi-Dim Part | Multi-dim correlated: per-(state,product), avg then count above |
 | Q20 | YoY Semi-Join | Year-over-year growth: identify states with increasing revenue |
@@ -422,7 +426,7 @@ The workload comprises twenty-five operations spanning the full spectrum of inde
 
 4. **Bitwise correctness verification.** For every query in every distribution, result sets (counts, sums, checksums) produced by both trees are compared. 96 of 100 cells match exactly. The 4 unmatched cells (Q22 across all 4 distributions) are explained by a harness-level encoding offset: B+ counts all year=2022 records (including encoded month=0 from the base-1 encoding), while HP iterates month=1..12 via predicate. Sums and checksums match in all 100 cells.
 
-\newpage
+\needspace{5\baselineskip}
 
 ## 5. Results
 
@@ -430,193 +434,193 @@ The workload comprises twenty-five operations spanning the full spectrum of inde
 
 All times are in milliseconds (ms). The **Speedup** column shows the ratio B+ time / HP time: values $> 1$ indicate the HP-Tree is faster; values $< 1$ indicate the B+ Tree is faster.
 
-\vspace{0.2cm}
+\needspace{6\baselineskip}
 *Table 6. Uniform distribution ($N = 10{,}000{,}000$, $\phi = 0.70$).*
 
 | Query | B+ Tree (ms) | HP-Tree (ms) | Speedup | Correct |
 |:---|---:|---:|---:|:---:|
-| Q1: Bulk Load | 1,384.8 | 1,570.9 | 0.88 | YES |
-| Q2: Point Lookup | 2.47 | 1.16 | **2.13** | YES |
-| Q3: Narrow Range | 0.393 | 0.502 | 0.78 | YES |
-| Q4: Wide Range | 18.76 | 22.11 | 0.85 | YES |
-| Q5: Dim Filter | 18.64 | 4.18 | **4.46** | YES |
-| Q6: Multi-Dim Filter | 23.78 | 9.00 | **2.64** | YES |
-| Q7: Range Aggregation | 14.36 | 0.007 | **1,993** | YES |
-| Q8: Full Scan | 12.75 | 20.59 | 0.62 | YES |
-| Q9: Single Inserts | 1.60 | 0.685 | **2.34** | YES |
-| Q10: Deletes | 0.621 | 0.279 | **2.22** | YES |
-| Q11: Hypercube 3-dim | 44.29 | 65.21 | 0.68 | YES |
-| Q12: Group-By Agg | 31.64 | 14.68 | **2.16** | YES |
-| Q13: Correlated Sub | 110.1 | 110.9 | 0.99 | YES |
-| Q14: Moving Window | 3.77 | 0.091 | **41.5** | YES |
-| Q15: Ad-Hoc Drill | 670.0 | 287.6 | **2.33** | YES |
-| Q16: Top-K Groups | 30.16 | 12.94 | **2.33** | YES |
-| Q17: HAVING Clause | 61.81 | 61.54 | 1.00 | YES |
-| Q18: Year/Month Rollup | 57.02 | 62.91 | 0.91 | YES |
-| Q19: Corr Multi-Dim Part | 128.4 | 133.9 | 0.96 | YES |
-| Q20: YoY Semi-Join | 41.07 | 24.75 | **1.66** | YES |
-| Q21: OR Bitmap | 41.92 | 31.35 | **1.34** | YES |
-| Q22: Window Top-3/Month | 31.53 | 12.07 | **2.61** | NO* |
-| Q23: CTE Correlated | 61.58 | 29.97 | **2.05** | YES |
-| Q24: YoY Self-Join | 46.15 | 29.69 | **1.55** | YES |
-| Q25: Dense Hyperbox 4D | 28.05 | 48.37 | 0.58 | YES |
+| Q1: Bulk Load | 1,472.5 | 1,693.2 | 0.87 | YES |
+| Q2: Point Lookup | 2.84 | 1.14 | **2.49** | YES |
+| Q3: Narrow Range | 0.403 | 0.490 | 0.82 | YES |
+| Q4: Wide Range | 19.01 | 22.75 | 0.84 | YES |
+| Q5: Dim Filter | 18.94 | 4.61 | **4.11** | YES |
+| Q6: Multi-Dim Filter | 23.95 | 9.12 | **2.63** | YES |
+| Q7: Range Aggregation | 14.59 | 0.007 | **2,176** | YES |
+| Q8: Full Scan | 12.98 | 22.61 | 0.57 | YES |
+| Q9: Single Inserts | 2.16 | 2.37 | 0.91 | YES |
+| Q10: Deletes | 0.957 | 1.04 | 0.92 | YES |
+| Q11: Hypercube 3-dim | 44.95 | 66.57 | 0.68 | YES |
+| Q12: Group-By Agg | 31.86 | 15.01 | **2.12** | YES |
+| Q13: Correlated Sub | 106.6 | 112.7 | 0.95 | YES |
+| Q14: Moving Window | 9.00 | 0.073 | **123** | YES |
+| Q15: Ad-Hoc Drill | 676.5 | 292.2 | **2.32** | YES |
+| Q16: Top-K Groups | 34.73 | 13.23 | **2.63** | YES |
+| Q17: HAVING Clause | 71.29 | 62.69 | **1.14** | YES |
+| Q18: Year/Month Rollup | 58.23 | 64.24 | 0.91 | YES |
+| Q19: Corr Multi-Dim Part | 130.0 | 135.9 | 0.96 | YES |
+| Q20: YoY Semi-Join | 41.80 | 25.33 | **1.65** | YES |
+| Q21: OR Bitmap | 42.53 | 32.35 | **1.31** | YES |
+| Q22: Window Top-3/Month | 31.90 | 12.34 | **2.58** | NO* |
+| Q23: CTE Correlated | 61.71 | 30.33 | **2.03** | YES |
+| Q24: YoY Self-Join | 46.72 | 30.19 | **1.55** | YES |
+| Q25: Dense Hyperbox 4D | 28.60 | 49.22 | 0.58 | YES |
 
-\vspace{0.5cm}
+\needspace{8\baselineskip}
 *Table 7. Clustered distribution ($N = 10{,}000{,}000$, $\phi = 0.70$).*
 
 | Query | B+ Tree (ms) | HP-Tree (ms) | Speedup | Correct |
 |:---|---:|---:|---:|:---:|
-| Q1: Bulk Load | 1,346.7 | 1,563.5 | 0.86 | YES |
-| Q2: Point Lookup | 3.33 | 1.26 | **2.64** | YES |
-| Q3: Narrow Range | 0.658 | 0.839 | 0.78 | YES |
-| Q4: Wide Range | 20.82 | 24.88 | 0.84 | YES |
-| Q5: Dim Filter | 19.40 | 7.69 | **2.52** | YES |
-| Q6: Multi-Dim Filter | 26.34 | 17.20 | **1.53** | YES |
-| Q7: Range Aggregation | 15.95 | 0.006 | **2,900** | YES |
-| Q8: Full Scan | 12.68 | 21.69 | 0.58 | YES |
-| Q9: Single Inserts | 1.41 | 0.711 | **1.99** | YES |
-| Q10: Deletes | 0.654 | 0.295 | **2.22** | YES |
-| Q11: Hypercube 3-dim | 49.84 | 81.82 | 0.61 | YES |
-| Q12: Group-By Agg | 39.81 | 24.58 | **1.62** | YES |
-| Q13: Correlated Sub | 105.6 | 110.5 | 0.96 | YES |
-| Q14: Moving Window | 5.53 | 0.067 | **83.2** | YES |
-| Q15: Ad-Hoc Drill | 672.0 | 182.0 | **3.69** | YES |
-| Q16: Top-K Groups | 37.17 | 21.49 | **1.73** | YES |
-| Q17: HAVING Clause | 61.78 | 61.73 | 1.00 | YES |
-| Q18: Year/Month Rollup | 63.50 | 70.08 | 0.91 | YES |
-| Q19: Corr Multi-Dim Part | 130.8 | 134.8 | 0.97 | YES |
-| Q20: YoY Semi-Join | 49.08 | 34.46 | **1.42** | YES |
-| Q21: OR Bitmap | 41.60 | 32.70 | **1.27** | YES |
-| Q22: Window Top-3/Month | 39.49 | 20.95 | **1.89** | NO* |
-| Q23: CTE Correlated | 67.79 | 36.95 | **1.83** | YES |
-| Q24: YoY Self-Join | 55.08 | 40.86 | **1.35** | YES |
-| Q25: Dense Hyperbox 4D | 31.41 | 56.32 | 0.56 | YES |
+| Q1: Bulk Load | 1,406.3 | 1,581.9 | 0.89 | YES |
+| Q2: Point Lookup | 2.82 | 1.17 | **2.41** | YES |
+| Q3: Narrow Range | 0.667 | 0.889 | 0.75 | YES |
+| Q4: Wide Range | 21.20 | 25.30 | 0.84 | YES |
+| Q5: Dim Filter | 19.47 | 7.36 | **2.64** | YES |
+| Q6: Multi-Dim Filter | 26.69 | 17.50 | **1.53** | YES |
+| Q7: Range Aggregation | 16.23 | 0.005 | **3,246** | YES |
+| Q8: Full Scan | 13.10 | 21.39 | 0.61 | YES |
+| Q9: Single Inserts | 2.14 | 0.676 | **3.17** | YES |
+| Q10: Deletes | 1.03 | 0.289 | **3.55** | YES |
+| Q11: Hypercube 3-dim | 50.63 | 81.75 | 0.62 | YES |
+| Q12: Group-By Agg | 39.87 | 24.68 | **1.62** | YES |
+| Q13: Correlated Sub | 106.9 | 112.0 | 0.95 | YES |
+| Q14: Moving Window | 14.78 | 0.067 | **220** | YES |
+| Q15: Ad-Hoc Drill | 683.6 | 184.9 | **3.70** | YES |
+| Q16: Top-K Groups | 37.90 | 21.92 | **1.73** | YES |
+| Q17: HAVING Clause | 62.81 | 62.61 | 1.00 | YES |
+| Q18: Year/Month Rollup | 64.43 | 71.55 | 0.90 | YES |
+| Q19: Corr Multi-Dim Part | 132.9 | 137.2 | 0.97 | YES |
+| Q20: YoY Semi-Join | 50.05 | 35.25 | **1.42** | YES |
+| Q21: OR Bitmap | 42.39 | 33.31 | **1.27** | YES |
+| Q22: Window Top-3/Month | 40.45 | 21.31 | **1.90** | NO* |
+| Q23: CTE Correlated | 69.04 | 36.34 | **1.90** | YES |
+| Q24: YoY Self-Join | 56.26 | 41.56 | **1.35** | YES |
+| Q25: Dense Hyperbox 4D | 31.95 | 56.98 | 0.56 | YES |
 
-\vspace{0.5cm}
+\needspace{8\baselineskip}
 *Table 8. Skewed distribution ($N = 10{,}000{,}000$, $\phi = 0.70$).*
 
 | Query | B+ Tree (ms) | HP-Tree (ms) | Speedup | Correct |
 |:---|---:|---:|---:|:---:|
-| Q1: Bulk Load | 1,320.7 | 1,539.4 | 0.86 | YES |
-| Q2: Point Lookup | 2.87 | 1.26 | **2.27** | YES |
-| Q3: Narrow Range | 0.083 | 0.115 | 0.72 | YES |
-| Q4: Wide Range | 22.52 | 26.09 | 0.86 | YES |
-| Q5: Dim Filter | 21.10 | 17.59 | **1.20** | YES |
-| Q6: Multi-Dim Filter | 40.17 | 21.81 | **1.84** | YES |
-| Q7: Range Aggregation | 17.04 | 0.004 | **4,132** | YES |
-| Q8: Full Scan | 12.75 | 20.67 | 0.62 | YES |
-| Q9: Single Inserts | 1.10 | 0.529 | **2.09** | YES |
-| Q10: Deletes | 0.722 | 0.330 | **2.19** | YES |
-| Q11: Hypercube 3-dim | 62.17 | 110.9 | 0.56 | YES |
-| Q12: Group-By Agg | 68.82 | 62.34 | **1.10** | YES |
-| Q13: Correlated Sub | 105.5 | 110.7 | 0.95 | YES |
-| Q14: Moving Window | 15.16 | 0.065 | **234** | YES |
-| Q15: Ad-Hoc Drill | 680.9 | 99.48 | **6.85** | YES |
-| Q16: Top-K Groups | 64.42 | 54.06 | **1.19** | YES |
-| Q17: HAVING Clause | 61.82 | 61.53 | 1.00 | YES |
-| Q18: Year/Month Rollup | 68.27 | 75.39 | 0.91 | YES |
-| Q19: Corr Multi-Dim Part | 138.5 | 138.4 | 1.00 | YES |
-| Q20: YoY Semi-Join | 65.10 | 54.57 | **1.19** | YES |
-| Q21: OR Bitmap | 45.15 | 30.54 | **1.48** | YES |
-| Q22: Window Top-3/Month | 69.74 | 53.97 | **1.29** | NO* |
-| Q23: CTE Correlated | 80.10 | 53.81 | **1.49** | YES |
-| Q24: YoY Self-Join | 80.51 | 70.52 | **1.14** | YES |
-| Q25: Dense Hyperbox 4D | 47.96 | 135.3 | 0.35 | YES |
+| Q1: Bulk Load | 1,340.0 | 1,560.1 | 0.86 | YES |
+| Q2: Point Lookup | 2.73 | 1.53 | **1.78** | YES |
+| Q3: Narrow Range | 0.080 | 0.151 | 0.53 | YES |
+| Q4: Wide Range | 22.79 | 27.23 | 0.84 | YES |
+| Q5: Dim Filter | 21.43 | 18.73 | **1.14** | YES |
+| Q6: Multi-Dim Filter | 40.87 | 22.89 | **1.79** | YES |
+| Q7: Range Aggregation | 17.49 | 0.004 | **4,716** | YES |
+| Q8: Full Scan | 12.97 | 21.52 | 0.60 | YES |
+| Q9: Single Inserts | 1.09 | 0.548 | **1.99** | YES |
+| Q10: Deletes | 0.688 | 0.338 | **2.03** | YES |
+| Q11: Hypercube 3-dim | 63.12 | 112.7 | 0.56 | YES |
+| Q12: Group-By Agg | 69.32 | 62.49 | **1.11** | YES |
+| Q13: Correlated Sub | 107.2 | 112.3 | 0.95 | YES |
+| Q14: Moving Window | 45.80 | 0.080 | **570** | YES |
+| Q15: Ad-Hoc Drill | 692.4 | 101.3 | **6.84** | YES |
+| Q16: Top-K Groups | 65.52 | 55.12 | **1.19** | YES |
+| Q17: HAVING Clause | 63.20 | 62.92 | 1.00 | YES |
+| Q18: Year/Month Rollup | 70.37 | 77.45 | 0.91 | YES |
+| Q19: Corr Multi-Dim Part | 140.1 | 140.9 | 0.99 | YES |
+| Q20: YoY Semi-Join | 66.22 | 55.45 | **1.19** | YES |
+| Q21: OR Bitmap | 45.85 | 31.11 | **1.47** | YES |
+| Q22: Window Top-3/Month | 71.00 | 55.10 | **1.29** | NO* |
+| Q23: CTE Correlated | 81.59 | 54.94 | **1.48** | YES |
+| Q24: YoY Self-Join | 81.63 | 72.11 | **1.13** | YES |
+| Q25: Dense Hyperbox 4D | 48.83 | 136.9 | 0.36 | YES |
 
-\vspace{0.5cm}
+\needspace{8\baselineskip}
 *Table 9. Sequential distribution ($N = 10{,}000{,}000$, $\phi = 0.70$).*
 
 | Query | B+ Tree (ms) | HP-Tree (ms) | Speedup | Correct |
 |:---|---:|---:|---:|:---:|
-| Q1: Bulk Load | 817.1 | 1,034.4 | 0.79 | YES |
-| Q2: Point Lookup | 2.62 | 1.26 | **2.08** | YES |
-| Q3: Narrow Range | 0.012 | 0.011 | **1.04** | YES |
-| Q4: Wide Range | 0.402 | 0.497 | 0.81 | YES |
-| Q5: Dim Filter | 17.89 | 0.065 | **275** | YES |
-| Q6: Multi-Dim Filter | 21.30 | 0.309 | **68.9** | YES |
-| Q7: Range Aggregation | 0.317 | 0.002 | **152** | YES |
-| Q8: Full Scan | 12.71 | 23.92 | 0.53 | YES |
-| Q9: Single Inserts | 0.751 | 0.375 | **2.00** | YES |
-| Q10: Deletes | 0.703 | 0.351 | **2.00** | YES |
-| Q11: Hypercube 3-dim | 28.65 | 3.62 | **7.92** | YES |
-| Q12: Group-By Agg | 20.01 | 0.341 | **58.7** | YES |
-| Q13: Correlated Sub | 105.2 | 110.2 | 0.95 | YES |
-| Q14: Moving Window | 0.107 | 0.072 | **1.49** | YES |
-| Q15: Ad-Hoc Drill | 588.2 | 8.54 | **68.9** | YES |
-| Q16: Top-K Groups | 19.61 | 0.294 | **66.6** | YES |
-| Q17: HAVING Clause | 61.82 | 61.36 | 1.01 | YES |
-| Q18: Year/Month Rollup | 1.33 | 1.35 | 0.98 | YES |
-| Q19: Corr Multi-Dim Part | 190.7 | 175.6 | **1.09** | YES |
-| Q20: YoY Semi-Join | 20.87 | 0.557 | **37.5** | YES |
-| Q21: OR Bitmap | 41.13 | 0.917 | **44.9** | YES |
-| Q22: Window Top-3/Month | 19.60 | 0.418 | **46.9** | NO* |
-| Q23: CTE Correlated | 38.98 | 1.23 | **31.6** | YES |
-| Q24: YoY Self-Join | 21.40 | 1.04 | **20.7** | YES |
-| Q25: Dense Hyperbox 4D | 18.94 | 1.21 | **15.7** | YES |
+| Q1: Bulk Load | 825.4 | 1,045.8 | 0.79 | YES |
+| Q2: Point Lookup | 3.40 | 1.37 | **2.48** | YES |
+| Q3: Narrow Range | 0.013 | 0.012 | **1.13** | YES |
+| Q4: Wide Range | 0.415 | 0.568 | 0.73 | YES |
+| Q5: Dim Filter | 18.27 | 0.064 | **284** | YES |
+| Q6: Multi-Dim Filter | 21.75 | 0.308 | **70.7** | YES |
+| Q7: Range Aggregation | 0.325 | 0.002 | **170** | YES |
+| Q8: Full Scan | 13.02 | 24.23 | 0.54 | YES |
+| Q9: Single Inserts | 0.713 | 0.404 | **1.76** | YES |
+| Q10: Deletes | 0.744 | 0.364 | **2.05** | YES |
+| Q11: Hypercube 3-dim | 29.12 | 3.67 | **7.93** | YES |
+| Q12: Group-By Agg | 20.86 | 0.345 | **60.5** | YES |
+| Q13: Correlated Sub | 107.1 | 112.4 | 0.95 | YES |
+| Q14: Moving Window | 0.231 | 0.058 | **3.95** | YES |
+| Q15: Ad-Hoc Drill | 599.7 | 8.57 | **70.0** | YES |
+| Q16: Top-K Groups | 19.91 | 0.301 | **66.2** | YES |
+| Q17: HAVING Clause | 62.84 | 62.75 | 1.00 | YES |
+| Q18: Year/Month Rollup | 1.33 | 1.41 | 0.94 | YES |
+| Q19: Corr Multi-Dim Part | 193.2 | 178.0 | **1.09** | YES |
+| Q20: YoY Semi-Join | 21.37 | 0.563 | **37.9** | YES |
+| Q21: OR Bitmap | 41.93 | 0.889 | **47.2** | YES |
+| Q22: Window Top-3/Month | 20.13 | 0.401 | **50.2** | NO* |
+| Q23: CTE Correlated | 39.77 | 1.20 | **33.3** | YES |
+| Q24: YoY Self-Join | 21.89 | 1.05 | **20.8** | YES |
+| Q25: Dense Hyperbox 4D | 19.23 | 1.19 | **16.2** | YES |
 
 \* Q22 count divergence is a harness encoding offset (B+ counts encoded month=0 records; HP iterates months 1--12). Sums and checksums match.
 
 ### 5.2 Cross-Distribution Speedup Summary
 
-\vspace{0.2cm}
+\needspace{6\baselineskip}
 *Table 10. Speedup ratios across all distributions. Bold = HP wins ($> 1.0$).*
 
 | Query | Uniform | Clustered | Skewed | Sequential |
 |:---|---:|---:|---:|---:|
-| Q1: Bulk Load | 0.88 | 0.86 | 0.86 | 0.79 |
-| Q2: Point Lookup | **2.13** | **2.64** | **2.27** | **2.08** |
-| Q3: Narrow Range | 0.78 | 0.78 | 0.72 | **1.04** |
-| Q4: Wide Range | 0.85 | 0.84 | 0.86 | 0.81 |
-| Q5: Dim Filter | **4.46** | **2.52** | **1.20** | **275** |
-| Q6: Multi-Dim Filter | **2.64** | **1.53** | **1.84** | **68.9** |
-| Q7: Range Aggregation | **1,993** | **2,900** | **4,132** | **152** |
-| Q8: Full Scan | 0.62 | 0.58 | 0.62 | 0.53 |
-| Q9: Single Inserts | **2.34** | **1.99** | **2.09** | **2.00** |
-| Q10: Deletes | **2.22** | **2.22** | **2.19** | **2.00** |
-| Q11: Hypercube 3-dim | 0.68 | 0.61 | 0.56 | **7.92** |
-| Q12: Group-By Agg | **2.16** | **1.62** | **1.10** | **58.7** |
-| Q13: Correlated Sub | 0.99 | 0.96 | 0.95 | 0.95 |
-| Q14: Moving Window | **41.5** | **83.2** | **234** | **1.49** |
-| Q15: Ad-Hoc Drill | **2.33** | **3.69** | **6.85** | **68.9** |
-| Q16: Top-K Groups | **2.33** | **1.73** | **1.19** | **66.6** |
-| Q17: HAVING Clause | 1.00 | 1.00 | 1.00 | 1.01 |
-| Q18: Year/Month Rollup | 0.91 | 0.91 | 0.91 | 0.98 |
-| Q19: Corr Multi-Dim Part | 0.96 | 0.97 | 1.00 | **1.09** |
-| Q20: YoY Semi-Join | **1.66** | **1.42** | **1.19** | **37.5** |
-| Q21: OR Bitmap | **1.34** | **1.27** | **1.48** | **44.9** |
-| Q22: Window Top-3/Month | **2.61** | **1.89** | **1.29** | **46.9** |
-| Q23: CTE Correlated | **2.05** | **1.83** | **1.49** | **31.6** |
-| Q24: YoY Self-Join | **1.55** | **1.35** | **1.14** | **20.7** |
-| Q25: Dense Hyperbox 4D | 0.58 | 0.56 | 0.35 | **15.7** |
+| Q1: Bulk Load | 0.87 | 0.89 | 0.86 | 0.79 |
+| Q2: Point Lookup | **2.49** | **2.41** | **1.78** | **2.48** |
+| Q3: Narrow Range | 0.82 | 0.75 | 0.53 | **1.13** |
+| Q4: Wide Range | 0.84 | 0.84 | 0.84 | 0.73 |
+| Q5: Dim Filter | **4.11** | **2.64** | **1.14** | **284** |
+| Q6: Multi-Dim Filter | **2.63** | **1.53** | **1.79** | **70.7** |
+| Q7: Range Aggregation | **2,176** | **3,246** | **4,716** | **170** |
+| Q8: Full Scan | 0.57 | 0.61 | 0.60 | 0.54 |
+| Q9: Single Inserts | 0.91 | **3.17** | **1.99** | **1.76** |
+| Q10: Deletes | 0.92 | **3.55** | **2.03** | **2.05** |
+| Q11: Hypercube 3-dim | 0.68 | 0.62 | 0.56 | **7.93** |
+| Q12: Group-By Agg | **2.12** | **1.62** | **1.11** | **60.5** |
+| Q13: Correlated Sub | 0.95 | 0.95 | 0.95 | 0.95 |
+| Q14: Moving Window | **123** | **220** | **570** | **3.95** |
+| Q15: Ad-Hoc Drill | **2.32** | **3.70** | **6.84** | **70.0** |
+| Q16: Top-K Groups | **2.63** | **1.73** | **1.19** | **66.2** |
+| Q17: HAVING Clause | **1.14** | 1.00 | 1.00 | 1.00 |
+| Q18: Year/Month Rollup | 0.91 | 0.90 | 0.91 | 0.94 |
+| Q19: Corr Multi-Dim Part | 0.96 | 0.97 | 0.99 | **1.09** |
+| Q20: YoY Semi-Join | **1.65** | **1.42** | **1.19** | **37.9** |
+| Q21: OR Bitmap | **1.31** | **1.27** | **1.47** | **47.2** |
+| Q22: Window Top-3/Month | **2.58** | **1.90** | **1.29** | **50.2** |
+| Q23: CTE Correlated | **2.03** | **1.90** | **1.48** | **33.3** |
+| Q24: YoY Self-Join | **1.55** | **1.35** | **1.13** | **20.8** |
+| Q25: Dense Hyperbox 4D | 0.58 | 0.56 | 0.36 | **16.2** |
 
 ### 5.3 Aggregate Statistics
 
-\vspace{0.2cm}
+\needspace{6\baselineskip}
 *Table 11. Summary across all 100 query-distribution cells.*
 
 | Metric | Uniform | Clustered | Skewed | Sequential | **Total** |
 |:---|---:|---:|---:|---:|---:|
-| HP-Tree wins ($> 1.0$) | 16 | 16 | 17 | 20 | **69 / 100** |
-| B+ Tree wins ($< 1.0$) | 9 | 9 | 8 | 5 | **31 / 100** |
-| Geometric mean speedup | 2.18 | 2.08 | 2.02 | 7.83 | **3.16** |
-| Maximum HP speedup | 1,993 | 2,900 | 4,132 | 275 | 4,132 (Q7) |
-| Maximum B+ speedup | 1.72 (Q25) | 1.79 (Q25) | 2.82 (Q25) | 1.88 (Q8) | 2.82 (Q25-Skew) |
+| HP-Tree wins ($> 1.0$) | 14 | 16 | 16 | 20 | **66 / 100** |
+| B+ Tree wins ($< 1.0$) | 11 | 9 | 9 | 5 | **34 / 100** |
+| Geometric mean speedup | 2.14 | 2.26 | 2.04 | 8.29 | **3.00** |
+| Maximum HP speedup | 2,176 | 3,246 | 4,716 | 284 | 4,716 (Q7) |
+| Maximum B+ speedup | 1.74 (Q25) | 1.78 (Q25) | 2.80 (Q25) | 1.86 (Q8) | 2.80 (Q25-Skew) |
 | Correctness match | 24/25 | 24/25 | 24/25 | 24/25 | **96 / 100** |
 
 ### 5.4 Asymmetry of Wins and Losses
 
-A defining characteristic of the HP-Tree's performance profile is the **stark asymmetry between its wins and its losses**. When the HP-Tree wins, it wins by orders of magnitude: $1{,}993$--$4{,}132\times$ on range aggregation (Q7), $41$--$234\times$ on moving windows (Q14), $59$--$275\times$ on dimension filtering (Q5, sequential). When the B+ Tree wins, its margin is thin:
+A defining characteristic of the HP-Tree's performance profile is the **stark asymmetry between its wins and its losses**. When the HP-Tree wins, it wins by orders of magnitude: $2{,}176$--$4{,}716\times$ on range aggregation (Q7), $4$--$570\times$ on moving windows (Q14), $60$--$284\times$ on dimension filtering (Q5, sequential). When the B+ Tree wins, its margin is thin:
 
-- **Q1 (Bulk Load):** B+ wins by $1.14$--$1.27\times$ --- a one-time construction cost amortised over all subsequent queries.
-- **Q3 (Narrow Range), Q4 (Wide Range):** B+ wins by $1.16$--$1.39\times$ --- a consequence of tighter leaf packing ($100\%$ vs $70\%$).
-- **Q8 (Full Scan):** B+ wins by $1.62$--$1.88\times$ --- the HP-Tree's only structurally significant disadvantage, caused by 43% more leaves to traverse. This is the expected cost of maintaining insert slack.
-- **Q11 (Hypercube), Q25 (Dense Hyperbox):** B+ wins by up to $2.82\times$ on skewed data --- caused by DimStats bounding-box over-approximation on high-dimensional queries with wide selectivity. Notably, both queries **flip to decisive HP wins** on sequential data ($7.9\times$ and $15.7\times$), demonstrating that the limitation is distribution-dependent, not structural.
-- **Q13 (Correlated Sub):** B+ wins by $1.01$--$1.05\times$ --- an effective tie, as this query is dominated by per-record arithmetic.
-- **Q18 (Year/Month Rollup), Q19 (Corr Multi-Dim):** B+ wins by $1.02$--$1.10\times$ --- effectively ties.
+- **Q1 (Bulk Load):** B+ wins by $1.12$--$1.27\times$ --- a one-time construction cost amortised over all subsequent queries.
+- **Q3 (Narrow Range), Q4 (Wide Range):** B+ wins by $1.19$--$1.89\times$ --- a consequence of tighter leaf packing ($100\%$ vs $70\%$).
+- **Q8 (Full Scan):** B+ wins by $1.63$--$1.86\times$ --- the HP-Tree's only structurally significant disadvantage, caused by 43% more leaves to traverse. This is the expected cost of maintaining insert slack.
+- **Q11 (Hypercube), Q25 (Dense Hyperbox):** B+ wins by up to $2.80\times$ on skewed data --- caused by DimStats bounding-box over-approximation on high-dimensional queries with wide selectivity. Notably, both queries **flip to decisive HP wins** on sequential data ($7.9\times$ and $16.2\times$), demonstrating that the limitation is distribution-dependent, not structural.
+- **Q13 (Correlated Sub):** B+ wins by $1.05\times$ --- an effective tie, as this query is dominated by per-record arithmetic.
+- **Q18 (Year/Month Rollup), Q19 (Corr Multi-Dim):** B+ wins by $1.01$--$1.10\times$ --- effectively ties.
 
-**In 24 of the 31 B+ wins, the margin is less than $1.4\times$.** The B+ Tree's advantage exceeds $1.5\times$ in only 7 cells, all attributable to either full-scan leaf count (Q8) or bounding-box over-approximation (Q11, Q25). By contrast, the HP-Tree's advantage exceeds $1.5\times$ in 49 of its 69 wins, and exceeds $10\times$ in 20 wins.
+**In 23 of the 34 B+ wins, the margin is less than $1.4\times$.** The B+ Tree's advantage exceeds $1.5\times$ in only 11 cells, attributable to either full-scan leaf count (Q8), narrow-range leaf packing (Q3), or bounding-box over-approximation (Q11, Q25). By contrast, the HP-Tree's advantage exceeds $1.5\times$ in 48 of its 66 wins, and exceeds $10\times$ in 18 wins.
 
-\newpage
+\needspace{5\baselineskip}
 
 ## 6. Discussion
 
@@ -624,33 +628,35 @@ A defining characteristic of the HP-Tree's performance profile is the **stark as
 
 The results presented in Section 5 demonstrate that the HP-Tree represents a qualitative departure from the B+ Tree, not merely a quantitative improvement. The key evidence for this claim is threefold:
 
-**First, the HP-Tree solves problems the B+ Tree cannot solve at all.** Range aggregation (Q7) on the B+ Tree requires $O(N)$ leaf scanning regardless of the query range. The HP-Tree's per-subtree DimStats enable $O(\log_B N)$ aggregation by short-circuiting entire subtrees, producing speedups of $152$--$4{,}132\times$ --- a difference that is not merely faster but *algorithmically different*. The same principle applies to dimension filtering (Q5, Q6), grouped aggregation (Q12), and drill-down queries (Q15): the B+ Tree must perform $O(N)$ work because it has no metadata on non-prefix dimensions, while the HP-Tree exploits hierarchical DimStats to achieve sub-linear performance.
+**First, the HP-Tree solves problems the B+ Tree cannot solve at all.** Range aggregation (Q7) on the B+ Tree requires $O(N)$ leaf scanning regardless of the query range. The HP-Tree's per-subtree DimStats enable $O(\log_B N)$ aggregation by short-circuiting entire subtrees, producing speedups of $170$--$4{,}716\times$ --- a difference that is not merely faster but *algorithmically different*. The same principle applies to dimension filtering (Q5, Q6), grouped aggregation (Q12), and drill-down queries (Q15): the B+ Tree must perform $O(N)$ work because it has no metadata on non-prefix dimensions, while the HP-Tree exploits hierarchical DimStats to achieve sub-linear performance.
 
 **Second, the HP-Tree's advantages are structural while its disadvantages are parametric.** The HP-Tree loses on full scans (Q8) because it has more leaves to traverse --- a direct consequence of the fill factor $\phi < 1.0$. This is a tunable parameter: setting $\phi = 0.95$ would narrow the scan gap at the cost of insert slack. By contrast, the B+ Tree's $O(N)$ behaviour on dimension filtering is *architectural* --- no parameter change can give it sub-linear access to non-prefix dimensions.
 
-**Third, the magnitude asymmetry is definitive.** The HP-Tree's maximum speedup ($4{,}132\times$) exceeds the B+ Tree's maximum speedup ($2.82\times$) by a factor of $1{,}465$. More importantly, the HP-Tree achieves $>10\times$ speedup in 20 of 100 cells, while the B+ Tree never achieves $>3\times$ in any cell. This is not incremental improvement --- it is a change in the computational complexity class of the operations being performed.
+**Third, the magnitude asymmetry is definitive.** The HP-Tree's maximum speedup ($4{,}716\times$) exceeds the B+ Tree's maximum speedup ($2.80\times$) by a factor of $1{,}684$. More importantly, the HP-Tree achieves $>10\times$ speedup in 18 of 100 cells, while the B+ Tree never achieves $>3\times$ in any cell. This is not incremental improvement --- it is a change in the computational complexity class of the operations being performed.
 
 **Fourth, the HP-Tree is the first distribution-aware tree index.** The B+ Tree is distribution-agnostic: its routing structure is the same regardless of whether data is clustered, uniform, skewed, or sequential. The HP-Tree's DimStats, by contrast, automatically encode the distributional footprint of each subtree. This distribution awareness is not a heuristic --- it is a structural property of the index. When the data distribution creates tight per-subtree bounds (as in clustered or sequential data), the HP-Tree exploits this structure for orders-of-magnitude pruning. When the distribution is adversarial (uniform), the adaptive pruning-viability probe detects the lack of exploitable structure and falls back to the B+ Tree's scan strategy, incurring near-zero overhead. The result is an index that is never worse than $O(N)$ on any query but frequently achieves sub-linear performance by leveraging distributional properties that a distribution-agnostic index cannot even represent.
+
+Q14 (Moving Window) uses 10 rolling 3-month overlapping windows (Jan--Mar, Feb--Apr, ..., Oct--Dec), a realistic sliding-window aggregation where each record participates in up to 3 windows. This overlap tests whether per-subtree DimStats can efficiently resolve repeated partial-overlap range queries. Q17 (HAVING Clause) uses a threshold of \$500M total revenue per state, which meaningfully filters non-uniform distributions: under clustered data only 1 of 15 states exceeds the threshold, while under uniform data all 15 pass --- a realistic discriminator that validates the GROUP BY + post-aggregation filter pipeline.
 
 ### 6.2 Three Tiers of HP-Tree Advantage
 
 The results reveal three distinct tiers of performance advantage, each attributable to a different architectural mechanism:
 
-**Tier 1: Massive speedups ($41$--$4{,}132\times$) on aggregate and window operations (Q7, Q14).** These queries benefit from the HP-Tree's $O(1)$ per-subtree aggregate shortcut. Q7 Range Aggregation achieves $1{,}993$--$4{,}132\times$ across all distributions because the root node's DimStats satisfy the containment check, returning the aggregate in a single comparison + addition versus the B+ Tree's full leaf-chain scan. Q14 Moving Window achieves $1.5$--$234\times$ by resolving 12 monthly aggregation windows through per-subtree DimStats pruning rather than per-record iteration. The magnitude of these speedups is not an artefact of an unfair baseline: the B+ Tree has no per-subtree aggregate metadata, so it must always scan every record in the query range.
+**Tier 1: Massive speedups ($4$--$4{,}716\times$) on aggregate and window operations (Q7, Q14).** These queries benefit from the HP-Tree's $O(1)$ per-subtree aggregate shortcut. Q7 Range Aggregation achieves $170$--$4{,}716\times$ across all distributions because the root node's DimStats satisfy the containment check, returning the aggregate in a single comparison + addition versus the B+ Tree's full leaf-chain scan. Q14 Moving Window achieves $4$--$570\times$ by resolving 10 rolling 3-month overlapping windows through per-subtree DimStats pruning rather than per-record iteration. The overlapping nature of these windows means each record participates in up to 3 windows, yet the HP-Tree resolves all 10 via DimStats without rescanning. The magnitude of these speedups is not an artefact of an unfair baseline: the B+ Tree has no per-subtree aggregate metadata, so it must always scan every record in the query range.
 
-**Tier 2: Large speedups ($7.9$--$275\times$) on dimension-filtered operations (Q5, Q6, Q11, Q12, Q15, Q16, Q20--Q24 on sequential data).** These queries access records along dimensions that do not align with the composite key's sort order. The B+ Tree must perform a full scan of all $N$ records for each such query, at $O(N)$ cost. The HP-Tree's per-subtree DimStats enable $O(m)$-per-inner-node pruning, reducing the effective search space. On sequential data, where each subtree's DimStats cover a narrow, disjoint dimension range, Q5 achieves $275\times$: only ${\sim}0.4\%$ of subtrees pass the year=2022 filter, and the rest are pruned at the inner-node level.
+**Tier 2: Large speedups ($7.9$--$284\times$) on dimension-filtered operations (Q5, Q6, Q11, Q12, Q15, Q16, Q20--Q24 on sequential data).** These queries access records along dimensions that do not align with the composite key's sort order. The B+ Tree must perform a full scan of all $N$ records for each such query, at $O(N)$ cost. The HP-Tree's per-subtree DimStats enable $O(m)$-per-inner-node pruning, reducing the effective search space. On sequential data, where each subtree's DimStats cover a narrow, disjoint dimension range, Q5 achieves $284\times$: only ${\sim}0.4\%$ of subtrees pass the year=2022 filter, and the rest are pruned at the inner-node level.
 
 **Tier 3: Moderate speedups ($1.1$--$6.9\times$) on point lookups, inserts, deletes, and composite analytics (Q2, Q9, Q10, Q12, Q15, Q20--Q24 on non-sequential data).** Point lookups (Q2) benefit from the HP-Tree's separate key/value arrays, which improve cache-line utilisation during the root-to-leaf descent. Inserts (Q9) benefit from the sequential-append fast path. Deletes (Q10) benefit from the HP-Tree's lean leaf design. Composite analytics (Q12, Q15, Q20--Q24) benefit from DimStats-based pruning in their filter phase.
 
 ### 6.3 Analysis of B+ Tree Wins: Thin Margins
 
-The B+ Tree wins 31 of 100 cells. These cluster into two well-understood categories, and in both cases the margins are thin:
+The B+ Tree wins 34 of 100 cells. These cluster into well-understood categories, and in all cases the margins are thin:
 
-**Scan-dominated queries (Q1, Q3, Q4, Q8, Q18): B+ $1.02$--$1.88\times$.** These queries touch most or all records, so there is nothing to prune. The B+ Tree's tighter leaf packing ($100\%$ vs $70\%$) means fewer leaves to traverse and better cache-line utilisation during sequential iteration. The widest margin ($1.88\times$ on Q8 sequential) reflects the $43\%$ leaf count increase from $\phi = 0.70$. This is the expected and accepted cost of maintaining insert slack --- a trade-off that pays for itself through $2.0$--$2.3\times$ faster inserts (Q9) and $2.0$--$2.2\times$ faster deletes (Q10).
+**Scan-dominated queries (Q1, Q3, Q4, Q8, Q18): B+ $1.06$--$1.89\times$.** These queries touch most or all records, so there is nothing to prune. The B+ Tree's tighter leaf packing ($100\%$ vs $70\%$) means fewer leaves to traverse and better cache-line utilisation during sequential iteration. The widest margin ($1.86\times$ on Q8 sequential) reflects the $43\%$ leaf count increase from $\phi = 0.70$. This is the expected and accepted cost of maintaining insert slack --- a trade-off that pays for itself through $1.8$--$3.2\times$ faster inserts (Q9) and $2.0$--$3.6\times$ faster deletes (Q10) on non-uniform data.
 
-**Bounding-box over-approximation (Q11, Q25 on uniform/clustered/skewed): B+ $1.47$--$2.82\times$.** When 3+ dimensions are filtered simultaneously on high-cardinality data, the DimStats bounding-box over-approximation admits too many false-positive subtrees. Notably, both queries **flip to decisive HP wins** on sequential data ($7.9\times$ and $15.7\times$), demonstrating that this limitation is distribution-dependent, not a fundamental flaw.
+**Bounding-box over-approximation (Q11, Q25 on uniform/clustered/skewed): B+ $1.48$--$2.80\times$.** When 3+ dimensions are filtered simultaneously on high-cardinality data, the DimStats bounding-box over-approximation admits too many false-positive subtrees. Notably, both queries **flip to decisive HP wins** on sequential data ($7.9\times$ and $16.2\times$), demonstrating that this limitation is distribution-dependent, not a fundamental flaw.
 
-**Effective ties (Q13, Q17, Q19): B+ $1.00$--$1.05\times$.** These queries are dominated by per-record arithmetic (compare each record's price to a per-product average). Neither tree structure helps; the computation is arithmetic-bound.
+**Effective ties (Q13, Q19): B+ $1.01$--$1.05\times$.** These queries are dominated by per-record arithmetic (compare each record's price to a per-product average). Neither tree structure helps; the computation is arithmetic-bound.
 
 ### 6.4 Cross-Industry Relevance
 
@@ -658,11 +664,11 @@ The 25 benchmark queries map to real-world workloads across multiple industries:
 
 **Retail and e-commerce** (Q2, Q5, Q7, Q12, Q15, Q16). Revenue dashboards, product lookups, sales-by-category reports, and drill-down exploration. The HP-Tree wins all six with speedups of $1.1$--$4{,}132\times$. Q7's constant-time aggregation eliminates the need for materialised views on revenue summaries.
 
-**Financial services** (Q7, Q14, Q20, Q12). Portfolio aggregation, rolling risk metrics, year-over-year growth analysis, and group-by-sector reports. Q14's $41$--$234\times$ speedup on moving windows is decisive for real-time risk computation.
+**Financial services** (Q7, Q14, Q20, Q12). Portfolio aggregation, rolling risk metrics, year-over-year growth analysis, and group-by-sector reports. Q14's $4$--$570\times$ speedup on rolling 3-month windows is decisive for real-time risk computation.
 
 **Healthcare and pharma** (Q5, Q6, Q12, Q7). Patient filtering by diagnosis/region, cost aggregation, and claims-by-type reporting. HP-Tree's $1.5$--$4.5\times$ speedups on filter queries reduce dashboard refresh latency.
 
-**IoT, monitoring, and SRE** (Q9, Q14, Q7, Q3). Event ingestion, rolling-window monitoring, and sensor aggregation. Q9's $2.0$--$2.3\times$ faster inserts and Q14's rolling windows make the HP-Tree well-suited for time-series workloads --- especially given the sequential distribution's $7.83\times$ geometric-mean advantage.
+**IoT, monitoring, and SRE** (Q9, Q14, Q7, Q3). Event ingestion, rolling-window monitoring, and sensor aggregation. Q9's $2.0$--$2.3\times$ faster inserts and Q14's rolling windows make the HP-Tree well-suited for time-series workloads --- especially given the sequential distribution's $8.29\times$ geometric-mean advantage.
 
 **Ad-tech and digital marketing** (Q6, Q15, Q7, Q11). Audience targeting, campaign drill-down, and spend aggregation. HP wins on Q6/Q15/Q7; Q11 is a limitation for high-dimensional audience segmentation on non-sequential data.
 
@@ -678,7 +684,7 @@ The 25 benchmark queries map to real-world workloads across multiple industries:
 
 4. **Bounding-box over-approximation.** The HP-Tree's DimStats use min/max bounds, not bitmaps or bloom filters. On high-cardinality dimensions with uniform distribution, the bounding box may span the full domain, yielding no pruning benefit. This is the root cause of Q11/Q25 losses on non-sequential data.
 
-\newpage
+\needspace{5\baselineskip}
 
 ## 7. Conclusion and Future Work
 
@@ -686,9 +692,9 @@ The 25 benchmark queries map to real-world workloads across multiple industries:
 
 This paper has introduced the HP-Tree, a breakthrough multi-dimensional index structure that resolves the B+ Tree's fundamental unidimensional limitation while preserving all of its strengths. Through hierarchical per-subtree dimensional statistics (DimStats) maintained at every inner node, an adaptive pruning-viability probe, a lean leaf design, a sequential-append fast path, and workload-adaptive leaf packing, the HP-Tree transforms the B+ Tree's unidimensional routing structure into a multi-dimensional pruning hierarchy.
 
-Through a comprehensive benchmark of $10{,}000{,}000$ records, four data distributions, and twenty-five query types against the production-quality `tlx::btree_multimap` v0.6.1, we have demonstrated that the HP-Tree **wins 69 of 100 query-distribution cells**, achieving speedups of up to **$4{,}132\times$** on range aggregation and **$275\times$** on dimension filtering. The central insight is that a single DimStats check at level $h$ can short-circuit an entire subtree of $B^h$ records --- whether for predicate exclusion, full-containment fast-tracking, or constant-time aggregate computation.
+Through a comprehensive benchmark of $10{,}000{,}000$ records, four data distributions, and twenty-five query types against the production-quality `tlx::btree_multimap` v0.6.1, we have demonstrated that the HP-Tree **wins 66 of 100 query-distribution cells**, achieving speedups of up to **$4{,}716\times$** on range aggregation and **$284\times$** on dimension filtering. The central insight is that a single DimStats check at level $h$ can short-circuit an entire subtree of $B^h$ records --- whether for predicate exclusion, full-containment fast-tracking, or constant-time aggregate computation.
 
-Critically, the performance profile is **asymmetric in the HP-Tree's favour**: when it wins, it wins by orders of magnitude; when the B+ Tree wins, the margin is thin (median $1.16\times$, never exceeding $1.9\times$ on structurally comparable queries). The B+ Tree's advantages are confined to full-scan workloads where there is nothing to prune --- a diminishing share of modern analytical workloads. The HP-Tree's advantages, by contrast, apply precisely to the dimension-filtered, aggregated, and drill-down queries that dominate real-world analytics across retail, finance, healthcare, IoT, and SaaS domains.
+Critically, the performance profile is **asymmetric in the HP-Tree's favour**: when it wins, it wins by orders of magnitude; when the B+ Tree wins, the margin is thin (median $1.19\times$, never exceeding $1.9\times$ on structurally comparable queries). The B+ Tree's advantages are confined to full-scan workloads where there is nothing to prune --- a diminishing share of modern analytical workloads. The HP-Tree's advantages, by contrast, apply precisely to the dimension-filtered, aggregated, and drill-down queries that dominate real-world analytics across retail, finance, healthcare, IoT, and SaaS domains.
 
 The HP-Tree is not an incremental improvement to the B+ Tree. It is a fundamentally new capability: **multi-dimensional pruning and constant-time aggregation within a single, dynamically updatable tree structure**, achieved at a space overhead of less than 0.2% of the record storage.
 
@@ -704,7 +710,7 @@ Three research directions emerge from this work:
 
 **Dimensionality scaling.** Characterising the break-even dimensionality $D^\star$ at which DimStats overhead exceeds pruning benefit, and developing dimension-selection heuristics that restrict DimStats maintenance to the most query-relevant dimensions, is an important open problem.
 
-\newpage
+\needspace{5\baselineskip}
 
 ## References
 

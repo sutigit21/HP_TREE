@@ -34,17 +34,17 @@ python3 python/generate_datasets.py --records 10000000
 
 | Distribution | HP Wins | B+ Wins |
 |---|---|---|
-| Uniform | 16 | 9 |
+| Uniform | 14 | 11 |
 | Clustered | 16 | 9 |
-| Skewed | 17 | 8 |
+| Skewed | 16 | 9 |
 | Sequential | 20 | 5 |
-| **Total** | **69** | **31** |
+| **Total** | **66** | **34** |
 
 ## Fill Factor Empirical Results
 
 | Fill | Wins | Notes |
 |---|---|---|
 | 0.50 | 51 | Catastrophic scan/delete penalty |
-| 0.70 | 69 | Best overall (ANALYTICAL profile) |
+| 0.70 | 66 | Best overall (ANALYTICAL profile) |
 | 0.84 | 65 | Original default (BALANCED) |
 | 0.90 | 67 | Good for scan-heavy workloads |

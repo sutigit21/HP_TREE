@@ -229,11 +229,14 @@ def build_query_spec(n, rng, sample_keys, extra_insert_keys):
         "agg_dim":   DIM_PRICE,
     }
 
-    # Moving window: 12 monthly windows within year 2022
+    # Moving window: 10 rolling 3-month windows within year 2022
+    # (Jan-Mar, Feb-Apr, ..., Oct-Dec)
     moving_windows = []
-    for m in range(1, 13):
+    for m in range(1, 11):
         lo = (YEAR_2022 << OFFSETS[DIM_YEAR]) | (m << OFFSETS[DIM_MONTH])
-        hi = lo | ((1 << OFFSETS[DIM_MONTH]) - 1)
+        hi_month = m + 2
+        hi = (YEAR_2022 << OFFSETS[DIM_YEAR]) | (hi_month << OFFSETS[DIM_MONTH]) \
+             | ((1 << OFFSETS[DIM_MONTH]) - 1)
         moving_windows.append({
             "lo": u128_to_pair(lo),
             "hi": u128_to_pair(hi),

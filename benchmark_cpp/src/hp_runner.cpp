@@ -336,7 +336,7 @@ int main(int argc, char** argv) {
     }
 
     // =========================================================================
-    //  Q14: Moving Window (12x aggregate_dim over sliding range)
+    //  Q14: Moving Window (10x rolling 3-month aggregate_dim over sliding range)
     // =========================================================================
     {
         bench::Timer t;
@@ -418,7 +418,7 @@ int main(int argc, char** argv) {
     //        GROUP BY state SUM(price) HAVING sum > threshold  (all records)
     // =========================================================================
     {
-        constexpr double HAVING_THRESHOLD = 5.0e9;
+        constexpr double HAVING_THRESHOLD = 5.0e10;
         bench::Timer t;
         std::unordered_map<uint64_t, double> sums;
         auto it = tree.runner_begin();
