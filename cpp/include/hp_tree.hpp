@@ -43,7 +43,8 @@ public:
     HPTree(const HPTreeConfig& cfg, const CompositeKeySchema& schema)
         : config_(cfg), schema_(schema), root_(nullptr),
           head_leaf_(nullptr), tail_leaf_(nullptr),
-          total_records_(0), levels_(0)
+          total_records_(0), levels_(0),
+          current_epoch_(1), next_txn_id_(1)
     {
         dim_count_ = schema_.dim_count();
         for (size_t d = 0; d < dim_count_; ++d) {
@@ -226,10 +227,12 @@ public:
     //  Aggregation: sum + count of dimension over [lo, hi] with O(1) shortcut
     // =========================================================================
     AggregateResult aggregate_dim(size_t dim,
-                                  CompositeKey lo, CompositeKey hi) const {
+                                  CompositeKey lo, CompositeKey hi,
+                                  Epoch reader_epoch = 0) const {
         AggregateResult r;
         if (root_ == nullptr || dim >= dim_count_ || lo > hi) return r;
-        aggregate_dim_node(root_, dim, lo, hi, r);
+        Epoch eff_epoch = reader_epoch > 0 ? reader_epoch : current_epoch_;
+        aggregate_dim_node(root_, dim, lo, hi, r, eff_epoch);
         return r;
     }
 
@@ -344,6 +347,50 @@ public:
 
     void flush_delta() { /* no-op in tlx-parity mode */ }
 
+    TxnContext begin_txn() {
+        TxnContext ctx;
+        ctx.txn_id    = next_txn_id_++;
+        ctx.read_epoch = current_epoch_;
+        return ctx;
+    }
+
+    void commit_txn(TxnContext& ctx) {
+        if (!config_.enable_mvcc) { ctx.reset(); return; }
+        Epoch commit_epoch = ++current_epoch_;
+        for (auto& entry : ctx.write_set) {
+            auto* in = static_cast<InnerNode*>(entry.inner_node);
+            in->agg_seqlock.write_lock();
+            if (entry.is_insert)
+                in->committed_agg[entry.dim_idx].add(entry.dim_val);
+            else
+                in->committed_agg[entry.dim_idx].sub(entry.dim_val);
+            in->last_commit_epoch = commit_epoch;
+            in->agg_seqlock.write_unlock();
+        }
+        ctx.reset();
+    }
+
+    void abort_txn(TxnContext& ctx) {
+        if (!config_.enable_mvcc) { ctx.reset(); return; }
+        for (auto& entry : ctx.write_set) {
+            auto* in = static_cast<InnerNode*>(entry.inner_node);
+            if (entry.is_insert) {
+                in->subtree_count--;
+                in->dim_stats[entry.dim_idx].count--;
+                in->dim_stats[entry.dim_idx].sum -=
+                    static_cast<double>(entry.dim_val);
+            } else {
+                in->subtree_count++;
+                in->dim_stats[entry.dim_idx].count++;
+                in->dim_stats[entry.dim_idx].sum +=
+                    static_cast<double>(entry.dim_val);
+            }
+        }
+        ctx.reset();
+    }
+
+    Epoch current_epoch() const { return current_epoch_; }
+
 private:
     HPTreeConfig       config_;
     CompositeKeySchema schema_;
@@ -355,6 +402,8 @@ private:
     LeafNode*          tail_leaf_;
     size_t             total_records_;
     size_t             levels_;
+    Epoch              current_epoch_;
+    TxnId              next_txn_id_;
 
     // -------------------------------------------------------------------------
     //  Cached dim extraction
@@ -421,6 +470,11 @@ private:
             inner->range_lo      = lo;
             inner->range_hi      = hi;
             inner->subtree_count = count;
+            for (size_t d = 0; d < dim_count_; ++d) {
+                inner->committed_agg[d].count = inner->dim_stats[d].count;
+                inner->committed_agg[d].sum   = inner->dim_stats[d].sum;
+            }
+            inner->last_commit_epoch = current_epoch_;
 
             parents.push_back(inner);
             k += chunk;
@@ -461,6 +515,11 @@ private:
             inner->range_lo      = lo;
             inner->range_hi      = hi;
             inner->subtree_count = count;
+            for (size_t d = 0; d < dim_count_; ++d) {
+                inner->committed_agg[d].count = inner->dim_stats[d].count;
+                inner->committed_agg[d].sum   = inner->dim_stats[d].sum;
+            }
+            inner->last_commit_epoch = current_epoch_;
 
             parents.push_back(inner);
             k += chunk;
@@ -505,27 +564,55 @@ private:
         in->range_lo       = lo;
         in->range_hi       = hi;
         in->subtree_count  = cnt;
+        for (size_t d = 0; d < dim_count_; ++d) {
+            in->committed_agg[d].count = in->dim_stats[d].count;
+            in->committed_agg[d].sum   = in->dim_stats[d].sum;
+        }
+        in->last_commit_epoch = current_epoch_;
     }
 
     // Incremental: O(dim_count) on insert of a single key.
     // range_lo/range_hi drive all pruning; dim_stats.count/sum kept exact.
     inline void inner_meta_add(InnerNode* in, CompositeKey key,
-                               const uint64_t* key_dims) {
+                               const uint64_t* key_dims,
+                               TxnContext* txn = nullptr) {
         in->subtree_count++;
-        for (size_t d = 0; d < dim_count_; ++d)
+        for (size_t d = 0; d < dim_count_; ++d) {
             in->dim_stats[d].add(key_dims[d]);
+            if (config_.enable_mvcc && txn) {
+                txn->write_set.push_back(
+                    {static_cast<void*>(in), d, key_dims[d], true});
+            }
+        }
+        if (!config_.enable_mvcc) {
+            for (size_t d = 0; d < dim_count_; ++d) {
+                in->committed_agg[d].count = in->dim_stats[d].count;
+                in->committed_agg[d].sum   = in->dim_stats[d].sum;
+            }
+        }
         if (key < in->range_lo) in->range_lo = key;
         if (key > in->range_hi) in->range_hi = key;
     }
 
     // Incremental delete — only exact count/sum are kept; min/max/range may
     // become stale-wide (never stale-narrow) which is safe for pruning.
-    inline void inner_meta_sub(InnerNode* in, const uint64_t* rec_dims) {
+    inline void inner_meta_sub(InnerNode* in, const uint64_t* rec_dims,
+                               TxnContext* txn = nullptr) {
         if (in->subtree_count > 0) in->subtree_count--;
         for (size_t d = 0; d < dim_count_; ++d) {
             if (in->dim_stats[d].count > 0) {
                 in->dim_stats[d].count--;
                 in->dim_stats[d].sum -= static_cast<double>(rec_dims[d]);
+            }
+            if (config_.enable_mvcc && txn) {
+                txn->write_set.push_back(
+                    {static_cast<void*>(in), d, rec_dims[d], false});
+            }
+        }
+        if (!config_.enable_mvcc) {
+            for (size_t d = 0; d < dim_count_; ++d) {
+                in->committed_agg[d].count = in->dim_stats[d].count;
+                in->committed_agg[d].sum   = in->dim_stats[d].sum;
             }
         }
     }
@@ -752,14 +839,33 @@ private:
 
     void aggregate_dim_node(NodeBase* n, size_t dim,
                             CompositeKey lo, CompositeKey hi,
-                            AggregateResult& r) const {
+                            AggregateResult& r,
+                            Epoch reader_epoch) const {
         if (n->level > 0) {
             auto* in = static_cast<InnerNode*>(n);
             if (in->range_hi < lo || in->range_lo > hi) return;
             if (in->range_lo >= lo && in->range_hi <= hi) {
-                r.count += in->subtree_count;
-                r.sum   += in->dim_stats[dim].sum;
-                return;
+                if (config_.enable_mvcc) {
+                    uint64_t seq;
+                    uint64_t c;
+                    double   s;
+                    Epoch    e;
+                    do {
+                        seq = in->agg_seqlock.read_begin();
+                        c = in->committed_agg[dim].count;
+                        s = in->committed_agg[dim].sum;
+                        e = in->last_commit_epoch;
+                    } while (!in->agg_seqlock.read_validate(seq));
+                    if (reader_epoch >= e) {
+                        r.count += c;
+                        r.sum   += s;
+                        return;
+                    }
+                } else {
+                    r.count += in->subtree_count;
+                    r.sum   += in->dim_stats[dim].sum;
+                    return;
+                }
             }
             // Bound the child-visit window by [lo, hi] via slotkey pivots.
             uint16_t first = 0;
@@ -767,7 +873,7 @@ private:
             uint16_t last = in->slotuse;
             while (last > 0 && in->slotkey[last - 1] > hi) --last;
             for (uint16_t i = first; i <= last; ++i)
-                aggregate_dim_node(in->childid[i], dim, lo, hi, r);
+                aggregate_dim_node(in->childid[i], dim, lo, hi, r, reader_epoch);
             return;
         }
         auto* lf = static_cast<LeafNode*>(n);
@@ -918,6 +1024,11 @@ private:
         in->range_lo      = lo;
         in->range_hi      = hi;
         in->subtree_count = cnt;
+        for (size_t d = 0; d < dim_count_; ++d) {
+            in->committed_agg[d].count = in->dim_stats[d].count;
+            in->committed_agg[d].sum   = in->dim_stats[d].sum;
+        }
+        in->last_commit_epoch = current_epoch_;
     }
 
     // -------------------------------------------------------------------------

@@ -6,6 +6,7 @@
 #include <cstdint>
 #include <algorithm>
 #include <array>
+#include <atomic>
 
 namespace hptree {
 
@@ -69,13 +70,22 @@ struct InnerNode : public NodeBase {
     uint64_t                           subtree_count;
     std::array<DimStats, MAX_DIMS>     dim_stats;
 
+    std::array<CommittedAgg, MAX_DIMS> committed_agg;
+    Epoch                              last_commit_epoch = 0;
+    SeqLock                            agg_seqlock;
+
     void init(uint16_t lvl, size_t dim_count) {
         level = lvl;
         slotuse = 0;
         range_lo = COMPOSITE_KEY_MAX;
         range_hi = COMPOSITE_KEY_MIN;
         subtree_count = 0;
-        for (size_t d = 0; d < dim_count; ++d) dim_stats[d] = DimStats{};
+        for (size_t d = 0; d < dim_count; ++d) {
+            dim_stats[d] = DimStats{};
+            committed_agg[d] = CommittedAgg{};
+        }
+        last_commit_epoch = 0;
+        agg_seqlock.seq.store(0, std::memory_order_relaxed);
     }
 
     bool is_full()      const { return slotuse >= INNER_SLOTMAX; }

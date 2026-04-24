@@ -15,6 +15,8 @@
 #include <unordered_map>
 #include <cassert>
 #include <stdexcept>
+#include <atomic>
+#include <mutex>
 
 namespace hptree {
 
@@ -370,6 +372,46 @@ struct DimStats {
             if (o.max_val > max_val) max_val = o.max_val;
         }
     }
+};
+
+struct CommittedAgg {
+    uint64_t count = 0;
+    double   sum   = 0.0;
+
+    void add(uint64_t v) { count++; sum += static_cast<double>(v); }
+    void sub(uint64_t v) { if (count > 0) { count--; sum -= static_cast<double>(v); } }
+    void merge(const CommittedAgg& o) { count += o.count; sum += o.sum; }
+};
+
+struct SeqLock {
+    std::atomic<uint64_t> seq{0};
+
+    uint64_t read_begin() const {
+        uint64_t s;
+        do { s = seq.load(std::memory_order_acquire); } while (s & 1);
+        return s;
+    }
+    bool read_validate(uint64_t s) const {
+        std::atomic_thread_fence(std::memory_order_acquire);
+        return seq.load(std::memory_order_relaxed) == s;
+    }
+    void write_lock()   { seq.fetch_add(1, std::memory_order_acquire); }
+    void write_unlock() { seq.fetch_add(1, std::memory_order_release); }
+};
+
+struct TxnWriteEntry {
+    void*    inner_node;
+    size_t   dim_idx;
+    uint64_t dim_val;
+    bool     is_insert;
+};
+
+struct TxnContext {
+    TxnId                       txn_id    = INVALID_TXN;
+    Epoch                       read_epoch = 0;
+    std::vector<TxnWriteEntry>  write_set;
+
+    void reset() { txn_id = INVALID_TXN; read_epoch = 0; write_set.clear(); }
 };
 
 inline CompositeKeySchema make_default_sales_schema() {
